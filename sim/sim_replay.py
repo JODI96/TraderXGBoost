@@ -93,6 +93,7 @@ def run_replay(cfg: dict, args) -> None:
 
     bar_count   = 0
     trade_count = 0
+    open_event  = {}   # stores last OPEN info until CLOSE
 
     with tqdm(total=len(feed), desc="Replay", unit="bar") as pbar:
         for candle in feed:
@@ -112,9 +113,25 @@ def run_replay(cfg: dict, args) -> None:
             event = engine.on_bar(feat_row, probs, ts, price)
             if event and event.get("event") == "OPEN":
                 trade_count += 1
-                pbar.write(f"  [{ts}] {event['direction']} @ {price:.2f}  "
-                           f"p_up={event.get('p_up', 0):.3f}  "
-                           f"p_down={event.get('p_down', 0):.3f}")
+                open_event = event
+            elif event and event.get("event") == "CLOSE":
+                reason  = event.get("exit_reason", "")
+                net_pnl = event.get("net_pnl", 0.0)
+                outcome = "CORRECT" if reason == "TP" else ("WRONG" if reason == "SL" else "TIME")
+                sign    = "+" if net_pnl >= 0 else ""
+                balance = portfolio.capital
+                direction = open_event.get("direction", event.get("direction", "?"))
+                entry_p   = open_event.get("price", 0.0)
+                p_up      = open_event.get("p_up",   0.0)
+                p_down    = open_event.get("p_down", 0.0)
+                pbar.write(
+                    f"  #{trade_count:3d} | {direction:5s} | "
+                    f"in {entry_p:.2f} -> out {event.get('exit_price', price):.2f} | "
+                    f"p_up={p_up:.3f} p_dn={p_down:.3f} | "
+                    f"PnL={sign}{net_pnl:.2f}$ [{reason}] {outcome:7s} | "
+                    f"Balance={balance:.2f}$"
+                )
+                open_event = {}
             bar_count += 1
             pbar.update(1)
 

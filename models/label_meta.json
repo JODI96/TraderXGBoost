@@ -1,61 +1,61 @@
 {
-  "train_rows": 1262332,
-  "test_rows": 315583,
+  "train_rows": 1262316,
+  "test_rows": 315579,
   "train_start": "2023-01-01 05:15:00+00:00",
-  "train_end": "2025-05-26 20:06:00+00:00",
-  "test_start": "2025-05-26 20:07:00+00:00",
-  "test_end": "2025-12-31 23:49:00+00:00",
-  "n_estimators": 150,
+  "train_end": "2025-05-26 19:50:00+00:00",
+  "test_start": "2025-05-26 19:51:00+00:00",
+  "test_end": "2025-12-31 23:29:00+00:00",
+  "n_estimators": 95,
   "n_features": 91,
-  "test_logloss": 0.024771211305007538,
+  "test_logloss": 0.05351788559898659,
   "fold_metrics": [
     {
       "fold": 0,
-      "n_rounds": 9,
-      "val_logloss": 0.0569,
-      "f1_DOWN": 0.0,
-      "f1_UP": 0.0465,
-      "f1_macro": 0.3475
+      "n_rounds": 7,
+      "val_logloss": 0.1242,
+      "f1_DOWN": 0.0097,
+      "f1_UP": 0.0397,
+      "f1_macro": 0.3467
     },
     {
       "fold": 1,
-      "n_rounds": 150,
-      "val_logloss": 0.0194,
-      "f1_DOWN": 0.0,
+      "n_rounds": 80,
+      "val_logloss": 0.0523,
+      "f1_DOWN": 0.026,
       "f1_UP": 0.0,
-      "f1_macro": 0.3329
+      "f1_macro": 0.3411
     },
     {
       "fold": 2,
-      "n_rounds": 270,
-      "val_logloss": 0.013,
+      "n_rounds": 141,
+      "val_logloss": 0.0361,
       "f1_DOWN": 0.0,
       "f1_UP": 0.0,
-      "f1_macro": 0.333
+      "f1_macro": 0.3325
     },
     {
       "fold": 3,
-      "n_rounds": 187,
-      "val_logloss": 0.0111,
+      "n_rounds": 229,
+      "val_logloss": 0.0298,
       "f1_DOWN": 0.0,
       "f1_UP": 0.0,
-      "f1_macro": 0.3331
+      "f1_macro": 0.3327
     },
     {
       "fold": 4,
-      "n_rounds": 133,
-      "val_logloss": 0.0122,
-      "f1_DOWN": 0.0,
-      "f1_UP": 0.0,
-      "f1_macro": 0.3331
+      "n_rounds": 95,
+      "val_logloss": 0.0315,
+      "f1_DOWN": 0.0054,
+      "f1_UP": 0.0216,
+      "f1_macro": 0.3417
     }
   ],
   "label_config": {
     "L_range": 30,
-    "H_horizon": 10,
+    "H_horizon": 30,
     "k_atr": 0.5,
     "L_atr": 14,
-    "sl_atr": 7,
+    "sl_atr": 10,
     "rr_ratio": 3.0,
     "maker_fee": 0.0002,
     "taker_fee": 0.0,
