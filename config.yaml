@@ -22,18 +22,18 @@ data:
 
 # ── Label Design ──────────────────────────────────────────────────────────────
 labels:
-  L_range:   30        # bars to look back for range high/low
+  L_range:   20        # bars to look back for range high/low
                        # increase → wider/more stable range; decrease → tighter/noisier range
 
-  H_horizon: 30        # bars to look ahead for the breakout target (must equal trading.time_stop)
+  H_horizon: 20        # bars to look ahead for the breakout target (must equal trading.time_stop)
                        # increase → more time to hit TP, more UP/DOWN labels, but trades take longer
                        # decrease → fewer labels, model sees less, faster trades
 
-  k_atr:     0.5       # how far price must move past the range boundary to count as a breakout (in ATR)
+  k_atr:     30       # how far price must move past the range boundary to count as a breakout (in ATR)
                        # increase → fewer but cleaner breakout labels
                        # decrease → more labels but more false breakouts
 
-  L_atr:     5        # EWM span for ATR used in label barrier calculation
+  L_atr:     1        # EWM span for ATR used in label barrier calculation
                        # increase → smoother/slower ATR; decrease → faster/noisier ATR
 
   # Barrier label: bar is labeled UP/DOWN only if price hits TP before SL within H_horizon bars.
@@ -115,18 +115,18 @@ training:
     objective:          "multi:softprob"   # outputs probabilities for all 3 classes; do not change
     num_class:          3                  # must match n_classes; do not change
 
-    n_estimators:       1000               # max number of trees; early stopping will use fewer if needed
+    n_estimators:       2000               # max number of trees; early stopping will use fewer if needed
                                            # increase if model underfits; decrease to speed up training
 
-    learning_rate:      0.03              # step size per tree; lower = more careful learning
+    learning_rate:      0.01              # step size per tree; lower = more careful learning
                                            # decrease (e.g. 0.01) with more n_estimators for better results
                                            # increase (e.g. 0.1) for faster but rougher training
 
-    max_depth:          3                 # max depth of each tree
+    max_depth:          5                 # max depth of each tree
                                            # increase → more complex patterns but risks overfitting
                                            # decrease → simpler model, less overfit, may underfit
 
-    min_child_weight:   80                # minimum sum of sample weights in a leaf node
+    min_child_weight:   50                # minimum sum of sample weights in a leaf node
                                            # increase → more conservative splits, ignores rare patterns
                                            # decrease → allows learning rare breakout patterns (important!)
                                            # too high (e.g. 200) = model cannot learn minority classes
@@ -159,11 +159,11 @@ training:
 
 # ── Trading Signal ────────────────────────────────────────────────────────────
 trading:
-  T_up:            0.01    # minimum model probability for UP_BREAK to trigger a LONG entry
+  T_up:            0.5    # minimum model probability for UP_BREAK to trigger a LONG entry
                            # increase → fewer but higher-confidence entries (better precision)
                            # decrease → more entries but more false signals
 
-  T_down:          0.01    # minimum model probability for DOWN_BREAK to trigger a SHORT entry
+  T_down:          0.5    # minimum model probability for DOWN_BREAK to trigger a SHORT entry
                            # same logic as T_up
 
   d_max_atr:       2      # max allowed distance from price to range boundary (in ATR units)
@@ -180,7 +180,7 @@ trading:
   tp_atr:          90     # take-profit distance in ATR (must equal sl_atr * rr_ratio)
                            # increase → bigger target, fewer TPs hit; decrease → easier to hit TP
 
-  time_stop:       60     # force-close trade after this many bars (must equal labels.H_horizon)
+  time_stop:       20     # force-close trade after this many bars (must equal labels.H_horizon)
                            # increase → more time to reach TP; decrease → exits sooner
 
   cooldown:        3      # bars to wait after a trade closes before allowing next entry
