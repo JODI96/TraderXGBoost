@@ -19,11 +19,18 @@ Live (single-step):
 
 from __future__ import annotations
 
+import warnings
 import numpy as np
 import pandas as pd
 from collections import deque
 from typing import Optional
 import yaml
+
+# Suppress pandas PerformanceWarning caused by adding many columns one-by-one.
+# The warning is cosmetic — computation is correct. A full pd.concat refactor
+# would fix it properly but isn't worth the complexity here.
+warnings.filterwarnings("ignore", message="DataFrame is highly fragmented",
+                        category=pd.errors.PerformanceWarning)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -50,6 +57,72 @@ def _slope(series: pd.Series, n: int = 5) -> pd.Series:
 
 def _rank_pct(series: pd.Series, window: int = 200) -> pd.Series:
     return series.rolling(window, min_periods=max(window // 4, 10)).rank(pct=True)
+
+
+def _compute_vp(df: pd.DataFrame, lookback: int,
+                atr: pd.Series, n_buckets: int = 40) -> tuple:
+    """
+    Rolling Volume Profile: for each bar compute POC, VAH, VAL over
+    the last `lookback` bars using numpy bincount (vectorised inner loop).
+
+    Returns 5 arrays (length = len(df)), NaN before warmup:
+        poc_dist      : (close - POC)  / ATR
+        vah_dist      : (close - VAH)  / ATR
+        val_dist      : (close - VAL)  / ATR
+        poc_vol_ratio : POC bucket volume / total volume  (concentration)
+        in_value_area : 1.0 if VAL <= close <= VAH, else 0.0
+    """
+    n       = len(df)
+    closes  = df["close"].values
+    highs   = df["high"].values
+    lows    = df["low"].values
+    volumes = df["volume"].values
+    atrs    = atr.values
+
+    poc_dist = np.full(n, np.nan)
+    vah_dist = np.full(n, np.nan)
+    val_dist = np.full(n, np.nan)
+    poc_vr   = np.full(n, np.nan)
+    in_va    = np.full(n, np.nan)
+
+    for i in range(lookback - 1, n):
+        sl   = slice(i - lookback + 1, i + 1)
+        h, l, v, c = highs[sl], lows[sl], volumes[sl], closes[sl]
+        pmin, pmax = l.min(), h.max()
+        atr_i = atrs[i]
+        if pmax <= pmin or atr_i < 1e-9:
+            continue
+
+        bsize = (pmax - pmin) / n_buckets
+        bidx  = np.clip(((c - pmin) / bsize).astype(int), 0, n_buckets - 1)
+        bvol  = np.bincount(bidx, weights=v, minlength=n_buckets)
+        total = bvol.sum()
+        if total < 1e-9:
+            continue
+
+        poc_i     = int(bvol.argmax())
+        poc_price = pmin + (poc_i + 0.5) * bsize
+
+        # Value area: greedily add highest-volume buckets until 70% reached
+        order  = np.argsort(bvol)[::-1]
+        cum    = 0.0
+        va_idx = []
+        for idx in order:
+            cum += bvol[idx]
+            va_idx.append(int(idx))
+            if cum >= total * 0.70:
+                break
+        vah_price = pmin + (max(va_idx) + 1) * bsize
+        val_price = pmin + min(va_idx) * bsize
+
+        cl           = closes[i]
+        poc_dist[i]  = (cl - poc_price) / atr_i
+        vah_dist[i]  = (cl - vah_price) / atr_i
+        val_dist[i]  = (cl - val_price)  / atr_i
+        poc_vr[i]    = bvol[poc_i] / total
+        in_va[i]     = 1.0 if val_price <= cl <= vah_price else 0.0
+
+    return poc_dist, vah_dist, val_dist, poc_vr, in_va
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -298,7 +371,16 @@ def compute_features(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
             except Exception as exc:
                 print(f"[features] MTF {suffix} failed: {exc}")
 
-    # ── H: Time-of-Day & Day-of-Week (cyclic encoding) ───────────────────────
+    # ── H: Volume Profile (POC / VAH / VAL) ──────────────────────────────────
+    for vp_lb in fc.get("range_lookbacks", [20, 60]):
+        _pd, _vhd, _vld, _pvr, _iva = _compute_vp(df, vp_lb, atr_short)
+        df[f"poc_dist_{vp_lb}"]      = _pd    # (close - POC)  / ATR
+        df[f"vah_dist_{vp_lb}"]      = _vhd   # (close - VAH)  / ATR
+        df[f"val_dist_{vp_lb}"]      = _vld   # (close - VAL)  / ATR
+        df[f"poc_vol_ratio_{vp_lb}"] = _pvr   # volume concentration at POC
+        df[f"in_value_area_{vp_lb}"] = _iva   # 1 if price inside value area
+
+    # ── I: Time-of-Day & Day-of-Week (cyclic encoding) ───────────────────────
     if isinstance(df.index, pd.DatetimeIndex):
         hr  = df.index.hour + df.index.minute / 60.0
         dow = df.index.dayofweek

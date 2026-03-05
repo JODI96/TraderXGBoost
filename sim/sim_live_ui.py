@@ -40,12 +40,24 @@ try:
 except ImportError:
     raise ImportError("websockets package required: pip install websockets>=10.0")
 
+import logging
+logging.getLogger("websockets.server").setLevel(logging.CRITICAL)
+
 import urllib.request as _urllib_req
 
 import features as feat_mod
 from sim.portfolio       import Portfolio
 from sim.execution       import ExecutionEngine
 from sim.binance_ws_feed import BinanceWSFeed
+
+
+def _feat(feat_row, key):
+    """Safely extract a float from a feature row; returns None if missing/NaN."""
+    try:
+        v = float(feat_row[key])
+        return None if (np.isnan(v) or np.isinf(v)) else round(v, 4)
+    except Exception:
+        return None
 
 
 # ── Global browser-client registry ────────────────────────────────────────────
@@ -192,23 +204,27 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
 
     last_price = 0.0
     last_ts    = None
+    cvd_col    = f"cvd_{cfg['features']['cvd_window']}"
 
     try:
         async for candle in feed:
             ts    = candle.name
             price = float(candle["close"])
+            vol   = float(candle["volume"])
+            buy_v = float(candle.get("taker_buy_vol", vol / 2))
             last_price = price
             last_ts    = ts
 
             # ── Send candle to browser chart ──────────────────────────────────
             await _broadcast({
-                "type":   "candle",
-                "ts":     int(ts.timestamp() * 1000),
-                "open":   float(candle["open"]),
-                "high":   float(candle["high"]),
-                "low":    float(candle["low"]),
-                "close":  float(candle["close"]),
-                "volume": float(candle["volume"]),
+                "type":    "candle",
+                "ts":      int(ts.timestamp() * 1000),
+                "open":    float(candle["open"]),
+                "high":    float(candle["high"]),
+                "low":     float(candle["low"]),
+                "close":   float(candle["close"]),
+                "volume":  vol,
+                "buy_vol": buy_v,
             })
 
             feat_row = feat_engine.update(candle)
@@ -243,16 +259,21 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
             n_trades = len(portfolio.trade_log)
             wins     = sum(1 for t in portfolio.trade_log if t.net_pnl > 0)
             stats: dict = {
-                "type":     "stats",
-                "ts":       int(ts.timestamp() * 1000),
-                "price":    round(price, 2),
-                "p_up":     round(float(p_up),   4),
-                "p_down":   round(float(p_down), 4),
-                "balance":  round(balance, 2),
-                "equity":   round(equity, 2),
-                "position": status,
-                "n_trades": n_trades,
-                "win_rate": round(wins / n_trades * 100, 1) if n_trades else 0,
+                "type":      "stats",
+                "ts":        int(ts.timestamp() * 1000),
+                "price":     round(price, 2),
+                "p_up":      round(float(p_up),   4),
+                "p_down":    round(float(p_down), 4),
+                "balance":   round(balance, 2),
+                "equity":    round(equity, 2),
+                "position":  status,
+                "n_trades":  n_trades,
+                "win_rate":  round(wins / n_trades * 100, 1) if n_trades else 0,
+                # ── Indicators ───────────────────────────────────────────────
+                "vwap":      _feat(feat_row, "vwap"),
+                "cvd":       _feat(feat_row, cvd_col),
+                "rel_vol":   _feat(feat_row, "rel_vol"),
+                "buy_ratio": _feat(feat_row, "taker_buy_ratio"),
             }
             if pos is not None:
                 stats["sl"]     = round(pos.sl_price,    2)
@@ -285,6 +306,8 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
                         "sl":        round(pos2.sl_price, 2),
                         "tp":        round(pos2.tp_price, 2),
                         "size_usd":  round(size_usd, 2),
+                        "p_up":      round(float(p_up),   3),
+                        "p_down":    round(float(p_down), 3),
                     })
 
                 elif ev_type == "CLOSE":
