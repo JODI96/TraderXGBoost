@@ -1,8 +1,8 @@
 # BTC 1-Minute Scalping System
 
 XGBoost-based breakout anticipation system for BTCUSDT perpetual futures.
-Predicts UP / DOWN / NO_BREAK on 1-minute candles using 91 features across
-volatility, volume, CVD/orderflow, VWAP, price levels, EMAs, and multi-timeframe context.
+Predicts UP / DOWN / NO_BREAK on 1-minute candles using 107 features across
+volatility, volume, CVD/orderflow, VWAP, volume profile (POC/VAH/VAL), price levels, EMAs, and multi-timeframe context.
 
 ---
 
@@ -140,7 +140,7 @@ Results saved to `models/`:
 - `backtest_equity.csv` / `backtest_equity.png`
 - `backtest_trades.csv`
 
-### 4. Replay Simulation (historical, fast)
+### 4. Replay Simulation — Terminal
 
 ```bash
 python sim/sim_replay.py
@@ -149,24 +149,41 @@ python sim/sim_replay.py
 Replays a CSV file through the full pipeline at configurable speed.
 Logs trades to `sim/logs/replay_log.jsonl`.
 
-### 5. Live Paper Trade — Terminal
+### 5. Replay Simulation — Browser Dashboard
+
+```bash
+python sim/sim_replay_ui.py
+python sim/sim_replay_ui.py --data Data/BTCUSDT/monthly/2026-02_1m.csv
+python sim/sim_replay_ui.py --speed 0                          # max speed
+python sim/sim_replay_ui.py --start 2025-06-01 --end 2025-07-01
+```
+
+Same as above, with a live browser UI at **http://localhost:8080**:
+- Candlestick chart with VWAP, Volume, CVD sub-panels
+- Fixed Range Volume Profile overlay (POC / VAH / VAL)
+- Volume spike bubbles, trade entry/exit arrows, in-trade candle highlighting
+- Running trade log with PnL and probability
+- Replay progress bar; waits for browser connection before starting
+
+### 6. Live Paper Trade — Terminal
 
 ```bash
 python sim/sim_live_binance.py
 ```
 
-Connects to Binance WebSocket, pre-warms the feature engine from a recent CSV,
+Connects to Binance WebSocket, pre-warms the feature engine from recent REST candles,
 then trades live candles in paper mode. Logs to `sim/logs/live_log.jsonl`.
 
-### 6. Live Paper Trade — Browser Dashboard
+### 7. Live Paper Trade — Browser Dashboard
 
 ```bash
 python sim/sim_live_ui.py
+python sim/sim_live_ui.py --symbol ETHUSDT
 ```
 
-Same as above, plus a browser UI:
-- Open **http://localhost:8080** for the Lightweight Charts dashboard (dark theme)
-- Shows live candlestick chart, trade markers, and a running trade log
+Same as above, plus the full browser UI at **http://localhost:8080**:
+- Live candlestick chart with VWAP, Volume, CVD, Volume Profile overlay
+- Trade entry/exit arrows, in-trade blue candles, running trade log
 - Internal WebSocket on port 8765
 
 ---
@@ -189,11 +206,12 @@ sim/
     execution.py        ExecutionEngine (signal -> order -> trade log)
     replay_feed.py      ReplayFeed (CSV row iterator)
     binance_ws_feed.py  BinanceWSFeed (async WS) + SyncBinanceWSFeed
-    sim_replay.py       Historical paper-trade simulation
+    sim_replay.py       Historical paper-trade simulation (terminal)
+    sim_replay_ui.py    Historical paper-trade simulation + browser dashboard
     sim_live_binance.py Live paper-trade (terminal)
     sim_live_ui.py      Live paper-trade + browser dashboard
     static/
-        index.html      Browser UI (Lightweight Charts, dark theme)
+        index.html      Browser UI (Lightweight Charts, dark theme, VP overlay)
     logs/               Trade logs (generated at runtime, not tracked)
 Data/                   OHLCV CSVs (not tracked in git)
 ```
@@ -202,14 +220,14 @@ Data/                   OHLCV CSVs (not tracked in git)
 
 ## Label Design
 
-Labels are computed over a 10-candle lookahead horizon:
+Labels are computed over a 30-candle lookahead horizon:
 
-- **UP_BREAK_SOON (2)** — price breaks above the 30-candle range high by `k * ATR(14)` and hits TP before SL
-- **DOWN_BREAK_SOON (0)** — price breaks below the 30-candle range low by `k * ATR(14)` and hits SL before TP
+- **UP_BREAK_SOON (2)** — price breaks above the 30-candle range high by `k * ATR` and hits TP before SL within 30 bars
+- **DOWN_BREAK_SOON (0)** — price breaks below the 30-candle range low by `k * ATR` and hits SL before TP within 30 bars
 - **NO_BREAK (1)** — neither condition met within the horizon
 
-Typical distribution (3-year): DOWN ~14%, NO_BREAK ~72%, UP ~14%.
-Break classes are upweighted (4x) during training to compensate for class imbalance.
+Distribution (3-year, sl_atr=30, rr=3.0): DOWN ~0.7%, NO_BREAK ~98.5%, UP ~0.8%.
+Break classes are upweighted (12x) during training to compensate for class imbalance.
 
 ---
 
