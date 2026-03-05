@@ -1,0 +1,109 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# BTC 1-min Scalping – Breakout Anticipation System
+# All durations in candle counts (1 candle = 1 minute) unless noted.
+# ─────────────────────────────────────────────────────────────────────────────
+
+data:
+  base_dir: "Data/BTCUSDT/full_year"  # single-coin path (backtest/eval/live)
+  data_root: "Data"                   # root for multi-coin training
+  symbol: "BTCUSDT"
+  primary_tf: "1m"
+  years: [2023, 2024, 2025]          # years to load
+  coins:                              # all coins used for training
+    - BTCUSDT
+    - ETHUSDT
+    - SOLUSDT
+    - BNBUSDT
+    - XRPUSDT
+    - ADAUSDT
+    - DOGEUSDT
+    - DOTUSDT
+    - HBARUSDT
+
+# ── Label Design ──────────────────────────────────────────────────────────────
+labels:
+  L_range:   30        # lookback for range high/low (candles)
+  H_horizon: 10        # look-ahead horizon (candles)
+  k_atr:     0.5       # breakout threshold = range ± k·ATR
+  L_atr:     14        # ATR EWM span
+  # Barrier label: the trade must hit TP before SL (1:3 RR)
+  # These MUST match trading.sl_atr and trading.tp_atr exactly.
+  sl_atr:    7       # stop-loss distance in ATR (entry ± sl_atr*ATR)
+  rr_ratio:  3.0       # reward:risk  →  tp = sl_atr * rr_ratio * ATR
+  # Round-trip cost components (each as fraction, e.g. 0.0002 = 0.02%)
+  # Binance Futures standard tier, limit orders both sides
+  maker_fee:  0.0002   # 0.02% per leg × 2 legs = 0.04% RT = $4 on $10k
+  taker_fee:  0.0000   # limit orders: no taker fee
+  slippage:   0.0000   # limit orders: fill at posted price
+  spread:     0.0000
+  # Label integers
+  # 0 = DOWN_BREAK_SOON  1 = NO_BREAK  2 = UP_BREAK_SOON
+  n_classes: 3
+
+# ── Feature Params ────────────────────────────────────────────────────────────
+features:
+  atr_short:        7      # fast ATR span (volatility compression signal)
+  atr_long:         50     # slow ATR span
+  bb_period:        20     # Bollinger Band period
+  bb_std:           2.0    # BB standard-deviation multiplier
+  keltner_mult:     1.5    # Keltner Channel ATR multiplier (for squeeze)
+  ema_periods:      [9, 21, 50, 200]
+  cvd_window:       20     # fast CVD rolling window
+  cvd_window_slow:  60     # slow CVD rolling window
+  vwap_window:      390    # rolling VWAP window (~1 NY session in minutes)
+  range_lookbacks:  [20, 60]   # range high/low lookbacks for feature group E
+  vol_lookback:     20     # relative volume denominator
+  live_buffer:      300    # rolling candle buffer for live inference
+
+# ── Training ──────────────────────────────────────────────────────────────────
+training:
+  test_size:    0.20        # final hold-out (by time)
+  n_wf_splits:  5           # walk-forward CV folds
+  gap_candles:  20          # gap between train/val to prevent leakage (= H_horizon)
+  break_weight: 4.0         # sample weight for break classes vs NO_BREAK
+
+  xgb_params:
+    objective:          "multi:softprob"
+    num_class:          3
+    n_estimators:       2000
+    learning_rate:      0.05
+    max_depth:          4
+    min_child_weight:   100
+    subsample:          0.80
+    colsample_bytree:   0.70
+    gamma:              1.0
+    reg_alpha:          0.10
+    reg_lambda:         1.0
+    tree_method:        "hist"
+    eval_metric:        "mlogloss"
+    seed:               42
+    verbosity:          0
+
+  early_stopping_rounds: 50
+  artifacts_dir:         "models"
+
+# ── Trading Signal ────────────────────────────────────────────────────────────
+trading:
+  T_up:            0.01   # prob threshold for UP_BREAK_SOON entry
+  T_down:          0.01   # prob threshold for DOWN_BREAK_SOON entry
+  d_max_atr:       2    # max distance to range boundary in ATR (proximity filter)
+  require_squeeze: false  # require squeeze_flag == 1 for entry
+  sl_atr:          7    # stop-loss distance in ATR  (must match labels.sl_atr)
+  tp_atr:          21    # take-profit distance in ATR (sl_atr * rr_ratio = 1.5*3)
+  time_stop:       30     # candles before forced exit (increased for 1:3 targets)
+  cooldown:        3      # candles cooldown after trade closes
+  max_positions:   1
+  initial_capital: 10000.0
+  position_size_pct: 1.0   # fraction of capital per trade (no leverage)
+
+# ── Simulation ────────────────────────────────────────────────────────────────
+simulation:
+  replay:
+    data_file:         "Data/BTCUSDT/full_year/2025_1m.csv"
+    speed_multiplier:  0    # 0 = no sleep (as-fast-as-possible); 60 = real-time
+    log_file:          "sim/logs/replay_log.jsonl"
+  live:
+    symbol:            "BTCUSDT"
+    interval:          "1m"
+    ws_url:            "wss://stream.binance.com:9443/ws"
+    log_file:          "sim/logs/live_log.jsonl"

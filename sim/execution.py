@@ -1,0 +1,189 @@
+"""
+sim/execution.py – Signal generation and order routing for the paper-trading sim.
+
+This module bridges the model predictions and the Portfolio:
+  1. Receives a feature vector (pd.Series) + probability vector.
+  2. Applies trading rules to determine if a trade should be entered/exited.
+  3. Calls portfolio.open_trade / portfolio.close_trade.
+  4. Logs every bar and every trade event to a JSONL file.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+
+from sim.portfolio import Portfolio, Trade
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+class ExecutionEngine:
+    """
+    Stateless signal evaluator + order router.
+
+    Parameters
+    ----------
+    cfg       : full config dict
+    portfolio : Portfolio instance (holds state)
+    log_path  : path to JSONL log file (appended per bar)
+    """
+
+    def __init__(self, cfg: dict, portfolio: Portfolio, log_path: str):
+        self.cfg   = cfg
+        self.port  = portfolio
+        self.log_path = log_path
+
+        tc = cfg["trading"]
+        lc = cfg["labels"]
+        self.T_up      = tc["T_up"]
+        self.T_down    = tc["T_down"]
+        self.d_max     = tc["d_max_atr"]
+        self.sl_atr    = tc["sl_atr"]
+        self.tp_atr    = tc["tp_atr"]
+        self.time_stop = tc["time_stop"]
+        self.pos_pct   = tc["position_size_pct"]
+        self.req_sq    = tc.get("require_squeeze", False)
+
+        self.cost_rt = (lc["maker_fee"] + lc["taker_fee"] +
+                        lc["slippage"]  + lc["spread"]) * 2
+
+        # Ensure log directory exists
+        os.makedirs(os.path.dirname(log_path) if os.path.dirname(log_path) else ".", exist_ok=True)
+        self._log_fh = open(log_path, "a", buffering=1)   # line-buffered
+
+        self.bar_count = 0
+
+    # ── Per-bar entry point ───────────────────────────────────────────────────
+    def on_bar(
+        self,
+        features: pd.Series,
+        probs:    np.ndarray,     # shape (3,): [p_down, p_no_break, p_up]
+        timestamp,
+        price:    float,
+    ) -> Optional[dict]:
+        """
+        Process one completed 1m bar.
+        Returns a trade event dict if a trade was opened/closed, else None.
+        """
+        self.bar_count += 1
+        self.port.on_bar(price)
+
+        # Extract feature scalars (safe get with fallback)
+        def _f(col, default=np.nan):
+            return float(features.get(col, default)) \
+                   if hasattr(features, "get") else default
+
+        atr      = _f("atr_short", _f("atr", 0.0))
+        dist_rh  = _f("dist_rh_20",  np.nan)   # (range_high_20 - close) / atr
+        dist_rl  = _f("dist_rl_20",  np.nan)
+        squeeze  = int(_f("squeeze_flag", 0))
+
+        p_down, p_no_break, p_up = float(probs[0]), float(probs[1]), float(probs[2])
+        pred_class = int(np.argmax(probs))
+
+        trade_event = None
+
+        # ── 1. Check time-stop exit ───────────────────────────────────────────
+        if self.port.position is not None:
+            time_held = self.port.bar_count - self.port.position.entry_bar
+            if time_held >= self.time_stop:
+                trade = self.port.close_trade(price, timestamp, "TIME")
+                trade_event = {"event": "CLOSE", "reason": "TIME",
+                               **self._trade_dict(trade)}
+
+        # ── 2. Check SL / TP exit ─────────────────────────────────────────────
+        if self.port.position is not None:
+            reason = self.port.check_exits(price)
+            if reason:
+                trade = self.port.close_trade(price, timestamp, reason)
+                trade_event = {"event": "CLOSE", "reason": reason,
+                               **self._trade_dict(trade)}
+
+        # ── 3. Entry logic ────────────────────────────────────────────────────
+        if self.port.can_enter and atr > 0:
+            sq_ok = (not self.req_sq) or (squeeze == 1)
+
+            # LONG: up-break anticipated
+            if (p_up >= self.T_up and
+                    not np.isnan(dist_rh) and dist_rh <= self.d_max and
+                    sq_ok):
+                self.port.open_trade(
+                    direction = 1,
+                    price     = price,
+                    atr       = atr,
+                    sl_atr    = self.sl_atr,
+                    tp_atr    = self.tp_atr,
+                    pos_pct   = self.pos_pct,
+                    timestamp = timestamp,
+                )
+                trade_event = {"event": "OPEN", "direction": "LONG",
+                               "price": price, "p_up": p_up,
+                               "sl": self.port.position.sl_price,
+                               "tp": self.port.position.tp_price}
+
+            # SHORT: down-break anticipated
+            elif (p_down >= self.T_down and
+                    not np.isnan(dist_rl) and dist_rl <= self.d_max and
+                    sq_ok):
+                self.port.open_trade(
+                    direction = -1,
+                    price     = price,
+                    atr       = atr,
+                    sl_atr    = self.sl_atr,
+                    tp_atr    = self.tp_atr,
+                    pos_pct   = self.pos_pct,
+                    timestamp = timestamp,
+                )
+                trade_event = {"event": "OPEN", "direction": "SHORT",
+                               "price": price, "p_down": p_down,
+                               "sl": self.port.position.sl_price,
+                               "tp": self.port.position.tp_price}
+
+        # ── Log bar ───────────────────────────────────────────────────────────
+        bar_log = {
+            "bar":       self.bar_count,
+            "ts":        str(timestamp),
+            "price":     round(price, 4),
+            "p_down":    round(p_down,     4),
+            "p_no_brk":  round(p_no_break, 4),
+            "p_up":      round(p_up,       4),
+            "pred":      pred_class,
+            "atr":       round(atr, 4),
+            "dist_rh":   round(dist_rh, 3) if not np.isnan(dist_rh) else None,
+            "dist_rl":   round(dist_rl, 3) if not np.isnan(dist_rl) else None,
+            "squeeze":   squeeze,
+            "in_pos":    not self.port.is_flat,
+            "equity":    round(self.port.mark_to_market(price), 2),
+            "trade":     trade_event,
+        }
+        self._log_fh.write(json.dumps(bar_log) + "\n")
+
+        return trade_event
+
+    # ── Force-close on shutdown ───────────────────────────────────────────────
+    def force_close(self, price: float, timestamp) -> Optional[Trade]:
+        if self.port.position is not None:
+            trade = self.port.close_trade(price, timestamp, "FORCE")
+            self._log_fh.write(json.dumps(
+                {"event": "FORCE_CLOSE", **self._trade_dict(trade)}) + "\n")
+            return trade
+        return None
+
+    def close_log(self) -> None:
+        self._log_fh.flush()
+        self._log_fh.close()
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+    @staticmethod
+    def _trade_dict(t: Trade) -> dict:
+        return {
+            "direction":   t.direction,
+            "entry_price": t.entry_price,
+            "exit_price":  t.exit_price,
+            "net_pnl":     t.net_pnl,
+            "exit_reason": t.exit_reason,
+        }

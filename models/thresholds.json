@@ -1,0 +1,10 @@
+{
+  "T_up": 0.01,
+  "T_down": 0.01,
+  "d_max_atr": 2,
+  "classes": {
+    "0": "DOWN_BREAK_SOON",
+    "1": "NO_BREAK",
+    "2": "UP_BREAK_SOON"
+  }
+}

@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live Trading Dashboard</title>
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0d0d1a;
+      color: #d0d0d0;
+      font-family: 'Segoe UI', 'Consolas', monospace;
+      font-size: 13px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header ── */
+    #header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 6px 14px;
+      background: #13132a;
+      border-bottom: 1px solid #22224a;
+      flex-shrink: 0;
+      height: 44px;
+    }
+    #sym { font-size: 16px; font-weight: bold; color: #fff; letter-spacing: 0.5px; }
+    #price-hdr {
+      font-size: 20px;
+      font-weight: bold;
+      min-width: 120px;
+      color: #ccc;
+      transition: color 0.3s;
+    }
+    #price-hdr.up   { color: #00c087; }
+    #price-hdr.down { color: #ff5050; }
+
+    #pos-badge {
+      padding: 2px 10px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: bold;
+      background: #1c1c3a;
+      color: #555;
+    }
+    #pos-badge.long  { background: #003d2e; color: #00c087; }
+    #pos-badge.short { background: #3d0015; color: #ff5050; }
+
+    #ws-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #555; flex-shrink: 0;
+    }
+    #ws-dot.live { background: #00c087; box-shadow: 0 0 6px #00c087; }
+    #ws-label { font-size: 11px; color: #555; }
+
+    /* ── Chart area ── */
+    #chart-wrap {
+      flex: 1;
+      min-height: 0;
+      position: relative;
+    }
+    #chart { width: 100%; height: 100%; }
+
+    #warmup-banner {
+      display: none;
+      position: absolute;
+      top: 12px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.75);
+      border: 1px solid #333;
+      border-radius: 6px;
+      padding: 8px 18px;
+      font-size: 13px;
+      color: #aaa;
+    }
+    #warmup-banner span { color: #f0a020; font-weight: bold; }
+
+    /* ── Bottom panel ── */
+    #bottom {
+      flex-shrink: 0;
+      height: 210px;
+      border-top: 1px solid #22224a;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Stats row */
+    #stats-row {
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+      padding: 7px 14px;
+      background: #0f0f22;
+      border-bottom: 1px solid #1a1a38;
+      flex-shrink: 0;
+    }
+    .s {
+      display: flex;
+      flex-direction: column;
+      min-width: 80px;
+    }
+    .s-lbl {
+      font-size: 9px;
+      color: #444;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+    }
+    .s-val { font-size: 14px; font-weight: bold; color: #ccc; }
+    .s-val.g  { color: #00c087; }
+    .s-val.r  { color: #ff5050; }
+    .s-val.dim { color: #555; }
+
+    /* Probability bars */
+    #prob-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 5px 14px;
+      background: #0d0d1a;
+      border-bottom: 1px solid #1a1a38;
+      flex-shrink: 0;
+    }
+    .pb-lbl { font-size: 11px; width: 40px; flex-shrink: 0; }
+    .pb-lbl.g { color: #00c087; }
+    .pb-lbl.r { color: #ff5050; }
+    .pb-track {
+      flex: 1;
+      height: 8px;
+      background: #1c1c3a;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .pb-fill { height: 100%; border-radius: 4px; transition: width 0.4s ease; width: 0%; }
+    .pb-fill.g { background: #00c087; }
+    .pb-fill.r { background: #ff5050; }
+    .pb-pct { font-size: 12px; font-weight: bold; width: 42px; text-align: right; flex-shrink: 0; }
+    .pb-pct.g { color: #00c087; }
+    .pb-pct.r { color: #ff5050; }
+    .pb-sep { color: #333; }
+
+    /* Trade log */
+    #log-hdr {
+      font-size: 10px;
+      color: #444;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      padding: 3px 14px;
+      background: #0f0f22;
+      border-bottom: 1px solid #1a1a38;
+      flex-shrink: 0;
+    }
+    #log-scroll { flex: 1; overflow-y: auto; }
+    #log-scroll::-webkit-scrollbar { width: 4px; }
+    #log-scroll::-webkit-scrollbar-track { background: #0d0d1a; }
+    #log-scroll::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    thead th {
+      position: sticky;
+      top: 0;
+      background: #0f0f22;
+      color: #444;
+      font-weight: normal;
+      text-align: left;
+      padding: 3px 8px;
+      font-size: 11px;
+      border-bottom: 1px solid #1a1a38;
+    }
+    tbody td { padding: 3px 8px; border-bottom: 1px solid #111122; }
+    tbody tr:hover td { background: #131330; }
+    .td-long  { color: #00c087; }
+    .td-short { color: #ff5050; }
+    .td-win   { color: #00c087; }
+    .td-loss  { color: #ff5050; }
+  </style>
+</head>
+<body>
+
+<!-- Header -->
+<div id="header">
+  <div id="sym">BTC/USDT</div>
+  <div id="price-hdr">---</div>
+  <div id="pos-badge">FLAT</div>
+  <div style="flex:1"></div>
+  <div id="ws-dot"></div>
+  <div id="ws-label">Connecting...</div>
+</div>
+
+<!-- Chart -->
+<div id="chart-wrap">
+  <div id="chart"></div>
+  <div id="warmup-banner">Warming up: <span id="warmup-n">--</span> bars remaining</div>
+</div>
+
+<!-- Bottom panel -->
+<div id="bottom">
+
+  <!-- Stats -->
+  <div id="stats-row">
+    <div class="s">
+      <div class="s-lbl">Balance</div>
+      <div class="s-val" id="s-bal">$--</div>
+    </div>
+    <div class="s">
+      <div class="s-lbl">Equity</div>
+      <div class="s-val" id="s-eq">$--</div>
+    </div>
+    <div class="s">
+      <div class="s-lbl">Unrealised</div>
+      <div class="s-val dim" id="s-unreal">--</div>
+    </div>
+    <div class="s">
+      <div class="s-lbl">Net P&amp;L</div>
+      <div class="s-val dim" id="s-pnl">$0.00</div>
+    </div>
+    <div class="s">
+      <div class="s-lbl">Position</div>
+      <div class="s-val dim" id="s-pos">FLAT</div>
+    </div>
+    <div class="s" style="min-width:160px">
+      <div class="s-lbl">Entry / SL / TP</div>
+      <div class="s-val dim" id="s-levels">-- / -- / --</div>
+    </div>
+    <div class="s">
+      <div class="s-lbl">Trades</div>
+      <div class="s-val" id="s-trades">0</div>
+    </div>
+    <div class="s">
+      <div class="s-lbl">Win Rate</div>
+      <div class="s-val" id="s-wr">--%</div>
+    </div>
+  </div>
+
+  <!-- Probability bars -->
+  <div id="prob-row">
+    <div class="pb-lbl r">DOWN</div>
+    <div class="pb-track">
+      <div class="pb-fill r" id="pb-dn"></div>
+    </div>
+    <div class="pb-pct r" id="pv-dn">0.0%</div>
+    <div class="pb-sep">|</div>
+    <div class="pb-lbl g">UP</div>
+    <div class="pb-track">
+      <div class="pb-fill g" id="pb-up"></div>
+    </div>
+    <div class="pb-pct g" id="pv-up">0.0%</div>
+  </div>
+
+  <!-- Trade log -->
+  <div id="log-hdr">Trade Log</div>
+  <div id="log-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>#</th><th>Time</th><th>Dir</th>
+          <th>Entry</th><th>Exit</th>
+          <th>Net P&amp;L</th><th>Reason</th>
+        </tr>
+      </thead>
+      <tbody id="log-body"></tbody>
+    </table>
+  </div>
+
+</div><!-- /bottom -->
+
+<script>
+// ── Chart initialisation ─────────────────────────────────────────────────────
+const chartEl = document.getElementById('chart');
+
+const chart = LightweightCharts.createChart(chartEl, {
+  layout:    { background: { color: '#0d0d1a' }, textColor: '#666' },
+  grid:      { vertLines: { color: '#141428' }, horzLines: { color: '#141428' } },
+  crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+  timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#22224a' },
+  rightPriceScale: { borderColor: '#22224a' },
+  handleScroll:   { mouseWheel: true, pressedMouseMove: true },
+  handleScale:    { mouseWheel: true, pinch: true },
+});
+
+const candles = chart.addCandlestickSeries({
+  upColor:         '#00c087',
+  downColor:       '#ff5050',
+  borderUpColor:   '#00c087',
+  borderDownColor: '#ff5050',
+  wickUpColor:     '#00c087',
+  wickDownColor:   '#ff5050',
+});
+
+// Keep chart sized to its container
+new ResizeObserver(() => {
+  chart.resize(chartEl.clientWidth, chartEl.clientHeight);
+}).observe(chartEl);
+
+// ── State ────────────────────────────────────────────────────────────────────
+let markers      = [];   // accumulated chart markers (sorted by time)
+let slLine       = null;
+let tpLine       = null;
+let entryLine    = null;
+let tradeCount   = 0;
+let initCapital  = null;
+let prevClose    = null;
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const fmt2 = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtUsd = n => '$' + fmt2(n);
+const fmtTime = ms => new Date(ms).toISOString().slice(11, 19);  // HH:MM:SS
+
+function removePriceLine(ref) {
+  if (ref) { try { candles.removePriceLine(ref); } catch (_) {} }
+}
+function clearTradeLines() {
+  removePriceLine(slLine);    slLine    = null;
+  removePriceLine(tpLine);    tpLine    = null;
+  removePriceLine(entryLine); entryLine = null;
+}
+
+function pushMarker(m) {
+  markers.push(m);
+  markers.sort((a, b) => a.time - b.time);
+  candles.setMarkers(markers);
+}
+
+// ── Message handlers ─────────────────────────────────────────────────────────
+function onCandle(m) {
+  const timeS = Math.floor(m.ts / 1000);
+  candles.update({ time: timeS, open: m.open, high: m.high, low: m.low, close: m.close });
+  chart.timeScale().scrollToRealTime();
+
+  const el = document.getElementById('price-hdr');
+  el.textContent = fmt2(m.close);
+  if (prevClose !== null) {
+    el.className = m.close >= prevClose ? 'up' : 'down';
+  }
+  prevClose = m.close;
+}
+
+function onStats(m) {
+  if (initCapital === null) initCapital = m.balance;
+
+  const netPnl = m.balance - initCapital;
+  document.getElementById('s-bal').textContent   = fmtUsd(m.balance);
+  document.getElementById('s-eq').textContent    = fmtUsd(m.equity);
+  document.getElementById('s-trades').textContent = m.n_trades;
+  document.getElementById('s-wr').textContent     = m.win_rate + '%';
+
+  const pnlEl = document.getElementById('s-pnl');
+  pnlEl.textContent  = (netPnl >= 0 ? '+' : '') + fmtUsd(netPnl);
+  pnlEl.className    = 's-val ' + (netPnl > 0 ? 'g' : netPnl < 0 ? 'r' : 'dim');
+
+  const posEl    = document.getElementById('s-pos');
+  const badge    = document.getElementById('pos-badge');
+  const unrealEl = document.getElementById('s-unreal');
+  const levEl    = document.getElementById('s-levels');
+
+  if (m.position === 'FLAT') {
+    posEl.textContent    = 'FLAT';     posEl.className    = 's-val dim';
+    badge.textContent    = 'FLAT';     badge.className    = '';
+    unrealEl.textContent = '--';       unrealEl.className = 's-val dim';
+    levEl.textContent    = '-- / -- / --';
+  } else {
+    const isL = m.position === 'LONG';
+    posEl.textContent = m.position;
+    posEl.className   = 's-val ' + (isL ? 'g' : 'r');
+    badge.textContent = m.position;
+    badge.className   = isL ? 'long' : 'short';
+
+    if (m.unreal != null) {
+      const u = m.unreal;
+      unrealEl.textContent = (u >= 0 ? '+' : '') + fmtUsd(u);
+      unrealEl.className   = 's-val ' + (u > 0 ? 'g' : u < 0 ? 'r' : 'dim');
+    }
+    if (m.entry != null) {
+      levEl.textContent = fmt2(m.entry) + ' / ' + fmt2(m.sl ?? 0) + ' / ' + fmt2(m.tp ?? 0);
+      levEl.className   = 's-val dim';
+    }
+  }
+
+  // Probability bars
+  const pUp = (m.p_up  || 0) * 100;
+  const pDn = (m.p_down || 0) * 100;
+  document.getElementById('pb-up').style.width  = pUp + '%';
+  document.getElementById('pb-dn').style.width  = pDn + '%';
+  document.getElementById('pv-up').textContent  = pUp.toFixed(1) + '%';
+  document.getElementById('pv-dn').textContent  = pDn.toFixed(1) + '%';
+}
+
+function onTradeOpen(m) {
+  const timeS = Math.floor(m.ts / 1000);
+  const isL   = m.direction === 'LONG';
+
+  // Arrow marker
+  pushMarker({
+    time:     timeS,
+    position: isL ? 'belowBar' : 'aboveBar',
+    color:    isL ? '#00c087' : '#ff5050',
+    shape:    isL ? 'arrowUp' : 'arrowDown',
+    text:     isL ? 'L' : 'S',
+    size:     1.5,
+  });
+
+  // Price lines
+  clearTradeLines();
+  entryLine = candles.createPriceLine({
+    price: m.price, color: '#ffffff55', lineWidth: 1,
+    lineStyle: LightweightCharts.LineStyle.Solid,
+    axisLabelVisible: true, title: 'ENTRY',
+  });
+  slLine = candles.createPriceLine({
+    price: m.sl, color: '#ff5050cc', lineWidth: 1,
+    lineStyle: LightweightCharts.LineStyle.Dashed,
+    axisLabelVisible: true, title: 'SL',
+  });
+  tpLine = candles.createPriceLine({
+    price: m.tp, color: '#00c087cc', lineWidth: 1,
+    lineStyle: LightweightCharts.LineStyle.Dashed,
+    axisLabelVisible: true, title: 'TP',
+  });
+}
+
+function onTradeClose(m) {
+  const timeS = Math.floor(m.ts / 1000);
+  const isWin = m.net_pnl > 0;
+
+  // Close marker (circle above candle)
+  pushMarker({
+    time:     timeS,
+    position: 'aboveBar',
+    color:    isWin ? '#00c087' : '#ff5050',
+    shape:    'circle',
+    text:     (m.net_pnl >= 0 ? '+' : '') + m.net_pnl.toFixed(0),
+    size:     0.8,
+  });
+
+  clearTradeLines();
+
+  // Add row to trade log (newest at top)
+  tradeCount++;
+  const tbody = document.getElementById('log-body');
+  const tr    = document.createElement('tr');
+  const pnlCls = isWin ? 'td-win' : 'td-loss';
+  const dirCls = m.direction === 'LONG' ? 'td-long' : 'td-short';
+  tr.innerHTML =
+    `<td>${tradeCount}</td>` +
+    `<td>${fmtTime(m.ts)}</td>` +
+    `<td class="${dirCls}">${m.direction}</td>` +
+    `<td>${fmt2(m.entry_price)}</td>` +
+    `<td>${fmt2(m.exit_price)}</td>` +
+    `<td class="${pnlCls}">${(m.net_pnl >= 0 ? '+' : '') + fmtUsd(m.net_pnl)}</td>` +
+    `<td>${m.reason}</td>`;
+  tbody.insertBefore(tr, tbody.firstChild);
+}
+
+function onWarmup(m) {
+  const b = document.getElementById('warmup-banner');
+  b.style.display = 'block';
+  document.getElementById('warmup-n').textContent = m.remaining;
+  if (m.price) {
+    const el = document.getElementById('price-hdr');
+    el.textContent = fmt2(m.price);
+  }
+}
+
+// ── WebSocket connection (auto-reconnect) ────────────────────────────────────
+const WS_URL = 'ws://localhost:8765';
+let ws = null, reconnTimer = null;
+
+function wsConnect() {
+  const dot  = document.getElementById('ws-dot');
+  const lbl  = document.getElementById('ws-label');
+  ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => {
+    dot.className  = 'live';
+    lbl.textContent = 'LIVE';
+    document.getElementById('warmup-banner').style.display = 'none';
+    if (reconnTimer) { clearTimeout(reconnTimer); reconnTimer = null; }
+  };
+
+  ws.onmessage = e => {
+    const m = JSON.parse(e.data);
+    switch (m.type) {
+      case 'candle':      onCandle(m);      break;
+      case 'stats':       onStats(m);       break;
+      case 'trade_open':  onTradeOpen(m);   break;
+      case 'trade_close': onTradeClose(m);  break;
+      case 'warmup':      onWarmup(m);      break;
+    }
+  };
+
+  ws.onclose = () => {
+    dot.className   = '';
+    lbl.textContent = 'Reconnecting...';
+    reconnTimer = setTimeout(wsConnect, 3000);
+  };
+
+  ws.onerror = () => ws.close();
+}
+
+wsConnect();
+</script>
+</body>
+</html>

@@ -1,0 +1,53 @@
+# ── Large data files ──────────────────────────────────────────
+Data/
+*.csv
+*.parquet
+*.feather
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+
+# ── Trained model artifacts ───────────────────────────────────
+models/xgb_model.json
+models/backtest_equity.csv
+models/backtest_equity.png
+models/backtest_trades.csv
+models/calibration.png
+models/confusion_matrix.png
+models/feature_importance.png
+models/threshold_curve.png
+models/signal_quality.csv
+models/live_portfolio.json
+models/replay_portfolio.json
+
+# Keep these model metadata files (small, useful to version)
+!models/feature_columns.json
+!models/thresholds.json
+!models/label_meta.json
+!models/backtest_report.json
+
+# ── Python ────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# ── Virtual environment ───────────────────────────────────────
+trader2/
+venv/
+.venv/
+env/
+
+# ── OS / editor ───────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.log

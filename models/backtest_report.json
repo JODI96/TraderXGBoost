@@ -1,0 +1,11 @@
+{
+  "total_return_pct": 108.04,
+  "n_trades": 73,
+  "win_rate": 94.5,
+  "profit_factor": 318.578,
+  "sharpe_ratio": 9.871,
+  "avg_win": 157.07,
+  "avg_loss": -8.5,
+  "max_drawdown_pct": -1.56,
+  "final_capital": 20803.99
+}
