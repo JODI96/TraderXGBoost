@@ -29,7 +29,21 @@
       border-bottom: 1px solid #22224a;
       flex-shrink: 0;
       height: 44px;
+      position: relative;
     }
+    #hdr-datetime {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 13px;
+      color: #aaa;
+      letter-spacing: 0.5px;
+      text-align: center;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+    #hdr-datetime .hdr-weekday { color: #f0a020; font-weight: bold; margin-right: 6px; }
+    #hdr-datetime .hdr-time    { color: #fff;    font-weight: bold; margin-left:  6px; }
     #sym { font-size: 16px; font-weight: bold; color: #fff; letter-spacing: 0.5px; }
     #price-hdr {
       font-size: 20px; font-weight: bold;
@@ -221,6 +235,7 @@
     .td-short { color: #ff5050; }
     .td-win   { color: #00c087; }
     .td-loss  { color: #ff5050; }
+    .tv-lightweight-charts a { display: none !important; }
   </style>
 </head>
 <body>
@@ -230,7 +245,17 @@
   <div id="sym">BTC/USDT</div>
   <div id="price-hdr">---</div>
   <div id="pos-badge">FLAT</div>
+  <!-- Centered date / time / weekday -->
+  <div id="hdr-datetime">
+    <span class="hdr-weekday" id="hdr-weekday">---</span><span id="hdr-date">----/--/--</span><span class="hdr-time" id="hdr-time">--:--</span>
+  </div>
   <div style="flex:1"></div>
+  <button id="pause-btn" onclick="togglePause()" style="
+      padding:2px 12px; font-size:11px; min-width:72px;
+      background:#1c1c3a; color:#888; border:1px solid #333;
+      border-radius:4px; cursor:pointer; font-family:inherit;">
+    PAUSE
+  </button>
   <div id="ws-dot"></div>
   <div id="ws-label">Connecting...</div>
   <button id="vp-btn" onclick="toggleVP()" style="
@@ -351,6 +376,7 @@ const CHART_OPTS = {
   rightPriceScale: { borderColor: '#22224a' },
   handleScroll: { mouseWheel: true, pressedMouseMove: true },
   handleScale:  { mouseWheel: true, pinch: true },
+  watermark:    { visible: false },
 };
 
 // Main chart
@@ -485,6 +511,7 @@ function onStats(m) {
   if (initCapital === null) initCapital = m.balance;
   const timeS  = Math.floor(m.ts / 1000);
   const netPnl = m.balance - initCapital;
+  updateHdrDatetime(m.ts);
 
   // VWAP line
   if (m.vwap != null) vwapLine.update({ time: timeS, value: m.vwap });
@@ -817,6 +844,38 @@ function drawVP() {
 // Redraw VP when chart scrolls
 mainChart.timeScale().subscribeVisibleLogicalRangeChange(() => drawVP());
 
+// ── Pause / Resume ────────────────────────────────────────────────────────────
+let paused = false;
+
+function sendCmd(cmd) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ cmd }));
+}
+
+function togglePause() {
+  paused = !paused;
+  const btn = document.getElementById('pause-btn');
+  if (paused) {
+    btn.textContent  = 'RESUME';
+    btn.style.color  = '#f0a020';
+    btn.style.border = '1px solid #f0a020';
+  } else {
+    btn.textContent  = 'PAUSE';
+    btn.style.color  = '#888';
+    btn.style.border = '1px solid #333';
+  }
+  sendCmd(paused ? 'pause' : 'resume');
+}
+
+// ── Header date / time / weekday ──────────────────────────────────────────────
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function updateHdrDatetime(ms) {
+  const d = new Date(ms);
+  document.getElementById('hdr-weekday').textContent = WEEKDAYS[d.getUTCDay()];
+  document.getElementById('hdr-date').textContent    = d.toISOString().slice(0, 10);
+  document.getElementById('hdr-time').textContent    = d.toISOString().slice(11, 16) + ' UTC';
+}
+
 // ── WebSocket (auto-reconnect) ────────────────────────────────────────────────
 const WS_URL = 'ws://localhost:8765';
 let ws = null, reconnTimer = null;
@@ -831,6 +890,12 @@ function wsConnect() {
     lbl.textContent = 'LIVE';
     document.getElementById('warmup-banner').style.display = 'none';
     if (reconnTimer) { clearTimeout(reconnTimer); reconnTimer = null; }
+    // reset pause state on (re)connect — server-side also resets
+    paused = false;
+    const pbtn = document.getElementById('pause-btn');
+    pbtn.textContent  = 'PAUSE';
+    pbtn.style.color  = '#888';
+    pbtn.style.border = '1px solid #333';
   };
 
   ws.onmessage = e => {

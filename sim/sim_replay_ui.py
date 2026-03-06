@@ -59,6 +59,7 @@ def _feat(feat_row, key):
 
 # ── Global browser-client registry ────────────────────────────────────────────
 _clients: set = set()
+_paused: bool = False
 
 
 async def _broadcast(msg: dict) -> None:
@@ -75,10 +76,19 @@ async def _broadcast(msg: dict) -> None:
 
 
 async def _ws_browser_handler(websocket, *_args) -> None:
+    global _paused
     _clients.add(websocket)
     try:
-        async for _ in websocket:
-            pass
+        async for raw in websocket:
+            try:
+                data = json.loads(raw)
+                cmd = data.get("cmd")
+                if cmd == "pause":
+                    _paused = True
+                elif cmd == "resume":
+                    _paused = False
+            except Exception:
+                pass
     except Exception:
         pass
     finally:
@@ -270,6 +280,8 @@ async def _replay_loop(cfg: dict, data_file: str, speed: float,
                 })
 
         # ── Pacing ────────────────────────────────────────────────────────────
+        while _paused:
+            await asyncio.sleep(0.1)
         if sleep_s > 0:
             await asyncio.sleep(sleep_s)
         elif bar_i % 100 == 0:
