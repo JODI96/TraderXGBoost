@@ -296,7 +296,7 @@
 
   <!-- CVD line -->
   <div class="sub-chart-wrap">
-    <div class="chart-label">CVD 20  <span id="lbl-cvd" style="color:#aaa"></span></div>
+    <div class="chart-label">CVD  <span id="lbl-cvd" style="color:#aaa"></span></div>
     <div id="chart-cvd"></div>
   </div>
 
@@ -420,15 +420,13 @@ const cvdChart = LightweightCharts.createChart(cvdEl, {
   rightPriceScale: { borderColor: '#22224a', scaleMargins: { top: 0.1, bottom: 0.1 } },
   timeScale: { visible: false, borderColor: '#22224a' },
 });
-const cvdSeries = cvdChart.addBaselineSeries({
-  baseValue: { type: 'price', price: 0 },
-  topLineColor:     '#00c087',
-  topFillColor1:    '#00c08744',
-  topFillColor2:    '#00c08700',
-  bottomLineColor:  '#ff5050',
-  bottomFillColor1: '#ff505000',
-  bottomFillColor2: '#ff505044',
-  lineWidth: 1,
+const cvdSeries = cvdChart.addCandlestickSeries({
+  upColor:        '#00c087',
+  downColor:      '#ff5050',
+  borderUpColor:  '#00c087',
+  borderDownColor:'#ff5050',
+  wickUpColor:    '#00c087',
+  wickDownColor:  '#ff5050',
   priceLineVisible: false,
   lastValueVisible: false,
 });
@@ -450,6 +448,13 @@ let prevClose    = null;
 let slLine = null, tpLine = null, entryLine = null;
 let lastProb     = null;   // probability stored at trade open
 let inTrade      = false;
+
+// Client-side CVD (rolling sum of per-bar delta, window matches config cvd_window)
+// Computed in onCandle from buy_vol/volume so CVD chart has data from bar 0,
+// keeping it aligned with the candle and volume charts under logical-range sync.
+const CVD_WINDOW  = 20;
+const cvdRing     = [];   // rolling window of last CVD_WINDOW deltas
+let   prevCvdClose = null;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const fmt2   = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -505,6 +510,26 @@ function onCandle(m) {
       color: buyDom ? '#00c08788' : '#ff505088',
     });
   }
+
+  // CVD candles — computed client-side so the chart has data from bar 0
+  // (fixes left-shift misalignment caused by server-side warmup delay)
+  if (m.volume != null) {
+    const delta    = 2 * (m.buy_vol || 0) - m.volume;
+    cvdRing.push(delta);
+    if (cvdRing.length > CVD_WINDOW) cvdRing.shift();
+    const cvdClose = cvdRing.reduce((a, b) => a + b, 0);
+    const cvdOpen  = prevCvdClose !== null ? prevCvdClose : cvdClose;
+    cvdSeries.update({
+      time:  timeS,
+      open:  cvdOpen,
+      high:  Math.max(cvdOpen, cvdClose),
+      low:   Math.min(cvdOpen, cvdClose),
+      close: cvdClose,
+    });
+    document.getElementById('lbl-cvd').textContent =
+      (cvdClose >= 0 ? '+' : '') + cvdClose.toFixed(0);
+    prevCvdClose = cvdClose;
+  }
 }
 
 function onStats(m) {
@@ -516,12 +541,6 @@ function onStats(m) {
   // VWAP line
   if (m.vwap != null) vwapLine.update({ time: timeS, value: m.vwap });
 
-  // CVD
-  if (m.cvd != null) {
-    cvdSeries.update({ time: timeS, value: m.cvd });
-    document.getElementById('lbl-cvd').textContent =
-      (m.cvd >= 0 ? '+' : '') + m.cvd.toFixed(0);
-  }
 
   // Relative volume label
   if (m.rel_vol != null) {

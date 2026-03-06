@@ -59,6 +59,35 @@ def _rank_pct(series: pd.Series, window: int = 200) -> pd.Series:
     return series.rolling(window, min_periods=max(window // 4, 10)).rank(pct=True)
 
 
+def _trend30_features(close: pd.Series, high: pd.Series, low: pd.Series,
+                      atr: pd.Series, window: int,
+                      slope_thresh: float, range_thresh: float) -> pd.DataFrame:
+    """
+    30-bar trend filter features.
+
+    trend30_slope   : (close - close[t-window]) / (window * ATR)  — normalised momentum
+    trend30_range   : rolling(window) high-low range / ATR         — how wide the move was
+    trend30_regime  : +1 up-trending / -1 down-trending / 0 consolidating
+    trend30_consol  : 1 if consolidating, else 0  (convenient binary signal)
+    """
+    slope = (close - close.shift(window)) / (window * atr + 1e-9)
+    rng   = (high.rolling(window, min_periods=window // 2).max() -
+             low.rolling(window,  min_periods=window // 2).min()) / (atr + 1e-9)
+
+    regime = pd.Series(0, index=close.index, dtype=np.int8)
+    regime[slope >  slope_thresh] =  1
+    regime[slope < -slope_thresh] = -1
+    # Override to 0 (consolidation) when range is compressed regardless of slope
+    regime[rng < range_thresh] = 0
+
+    return pd.DataFrame({
+        "trend30_slope":  slope,
+        "trend30_range":  rng,
+        "trend30_regime": regime,
+        "trend30_consol": (regime == 0).astype(np.int8),
+    }, index=close.index)
+
+
 def _compute_vp(df: pd.DataFrame, lookback: int,
                 atr: pd.Series, n_buckets: int = 40) -> tuple:
     """
@@ -288,6 +317,12 @@ def compute_features(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
         (df["vol_zscore"] > 1.5).astype(int) * df["delta_ratio"].abs()
     )
 
+    # CVD candle magnitude: percentile rank of |delta| over recent window (0=tiny, 1=huge)
+    # Interaction with trend direction is handled in Section K after trend30 is computed.
+    cvd_sw = fc.get("cvd_strength_window", 50)
+    abs_delta = delta.abs()
+    df["cvd_candle_pct"] = abs_delta.rolling(cvd_sw, min_periods=max(cvd_sw // 4, 5)).rank(pct=True)
+
     # ── D: VWAP Context ──────────────────────────────────────────────────────
     tp     = (df["high"] + df["low"] + df["close"]) / 3.0
     tp_vol = tp * df["volume"]
@@ -379,6 +414,32 @@ def compute_features(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
         df[f"val_dist_{vp_lb}"]      = _vld   # (close - VAL)  / ATR
         df[f"poc_vol_ratio_{vp_lb}"] = _pvr   # volume concentration at POC
         df[f"in_value_area_{vp_lb}"] = _iva   # 1 if price inside value area
+
+    # ── J: 30-min Trend Filter ────────────────────────────────────────────────
+    t30w = fc.get("trend30_window",       30)
+    t30s = fc.get("trend30_slope_thresh", 0.002)
+    t30r = fc.get("trend30_range_thresh", 3.0)
+    t30  = _trend30_features(df["close"], df["high"], df["low"],
+                             atr_short, t30w, t30s, t30r)
+    for col in t30.columns:
+        df[col] = t30[col]
+
+    # ── K: CVD × Trend Interaction ────────────────────────────────────────────
+    # Explicit product features so the model gets a single axis encoding
+    # "CVD confirms trend direction" without needing deep cross-feature splits.
+    #
+    #   cvd_trend_align   : delta_ratio × trend30_regime
+    #       > 0  →  CVD direction matches trend (bullish CVD in uptrend, or bearish in downtrend)
+    #       < 0  →  CVD contradicts trend
+    #       = 0  →  consolidating (regime=0) or no net delta
+    #
+    #   cvd_trend_strength: cvd_candle_pct × trend30_regime
+    #       high +  →  large bullish CVD candle during uptrend  (prefer LONG)
+    #       high -  →  large bearish CVD candle during downtrend (prefer SHORT)
+    #       ≈ 0     →  consolidation or small CVD candle
+    t30_regime = df["trend30_regime"].astype(float)
+    df["cvd_trend_align"]    = df["delta_ratio"] * t30_regime
+    df["cvd_trend_strength"] = df["cvd_candle_pct"] * t30_regime
 
     # ── I: Time-of-Day & Day-of-Week (cyclic encoding) ───────────────────────
     if isinstance(df.index, pd.DatetimeIndex):

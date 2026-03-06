@@ -1,62 +1,62 @@
 {
-  "train_rows": 1262324,
-  "test_rows": 315581,
+  "train_rows": 1262328,
+  "test_rows": 315582,
   "train_start": "2023-01-01 05:15:00+00:00",
-  "train_end": "2025-05-26 19:58:00+00:00",
-  "test_start": "2025-05-26 19:59:00+00:00",
-  "test_end": "2025-12-31 23:39:00+00:00",
-  "n_estimators": 752,
-  "n_features": 101,
-  "test_logloss": 0.10438075978589426,
+  "train_end": "2025-05-26 20:02:00+00:00",
+  "test_start": "2025-05-26 20:03:00+00:00",
+  "test_end": "2025-12-31 23:44:00+00:00",
+  "n_estimators": 766,
+  "n_features": 108,
+  "test_logloss": 0.441492970723186,
   "fold_metrics": [
     {
       "fold": 0,
-      "n_rounds": 271,
-      "val_logloss": 0.1928,
-      "f1_DOWN": 0.3042,
-      "f1_UP": 0.3341,
-      "f1_macro": 0.5368
+      "n_rounds": 121,
+      "val_logloss": 0.5312,
+      "f1_DOWN": 0.1006,
+      "f1_UP": 0.1144,
+      "f1_macro": 0.3832
     },
     {
       "fold": 1,
-      "n_rounds": 1996,
-      "val_logloss": 0.0352,
-      "f1_DOWN": 0.3526,
-      "f1_UP": 0.272,
-      "f1_macro": 0.54
+      "n_rounds": 3670,
+      "val_logloss": 0.3543,
+      "f1_DOWN": 0.075,
+      "f1_UP": 0.0317,
+      "f1_macro": 0.3543
     },
     {
       "fold": 2,
-      "n_rounds": 796,
-      "val_logloss": 0.0357,
-      "f1_DOWN": 0.3166,
-      "f1_UP": 0.2543,
-      "f1_macro": 0.5221
+      "n_rounds": 766,
+      "val_logloss": 0.3696,
+      "f1_DOWN": 0.0817,
+      "f1_UP": 0.0592,
+      "f1_macro": 0.3667
     },
     {
       "fold": 3,
-      "n_rounds": 752,
-      "val_logloss": 0.0318,
-      "f1_DOWN": 0.2886,
-      "f1_UP": 0.261,
-      "f1_macro": 0.5153
+      "n_rounds": 718,
+      "val_logloss": 0.3567,
+      "f1_DOWN": 0.0525,
+      "f1_UP": 0.0475,
+      "f1_macro": 0.3548
     },
     {
       "fold": 4,
-      "n_rounds": 640,
-      "val_logloss": 0.0393,
-      "f1_DOWN": 0.3554,
-      "f1_UP": 0.3266,
-      "f1_macro": 0.559
+      "n_rounds": 1658,
+      "val_logloss": 0.3448,
+      "f1_DOWN": 0.1033,
+      "f1_UP": 0.0884,
+      "f1_macro": 0.3846
     }
   ],
   "label_config": {
     "L_range": 20,
-    "H_horizon": 20,
-    "k_atr": 30,
-    "L_atr": 1,
-    "sl_atr": 30,
-    "rr_ratio": 3.0,
+    "H_horizon": 15,
+    "k_atr": 5,
+    "L_atr": 7,
+    "sl_atr": 2,
+    "rr_ratio": 3.5,
     "maker_fee": 0.0002,
     "taker_fee": 0.0,
     "slippage": 0.0,
