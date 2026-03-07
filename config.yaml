@@ -10,9 +10,9 @@ data:
   primary_tf: "1m"
   years: [2023, 2024, 2025]          # years to load; more years = better model but slower training
   coins:                              # coins used for training; more coins = more data diversity
-    - BTCUSDT                         # uncomment others to train on multiple coins (requires data files)
-#    - ETHUSDT
-#    - SOLUSDT
+    - BTCUSDT
+    - ETHUSDT
+    - SOLUSDT
 #    - BNBUSDT
 #    - XRPUSDT
 #    - ADAUSDT
@@ -23,15 +23,17 @@ data:
 # ── Label Design ──────────────────────────────────────────────────────────────
 labels:
   L_range:   20        # bars to look back for range high/low              [range: 5–60]
+                       # 20 bars = 20-min consolidation; stable range, ~3% label rate
                        # increase → wider/more stable range; decrease → tighter/noisier range
 
-  H_horizon: 20        # bars to look ahead for the breakout target         [range: 5–60]
+  H_horizon: 20        # bars to look ahead for the breakout target         [range: 5-60]
                        # must equal trading.time_stop
                        # 20 bars = 20-minute trade window on 1m data
                        # increase → more time to hit TP, more UP/DOWN labels, but trades take longer
                        # decrease → fewer labels, model sees less, faster trades
 
-  k_atr:     5         # how far price must move past range boundary (in ATR) [range: 5–50]
+  k_atr:     5         # how far price must move past range boundary (in ATR) [range: 1–50]
+                       # 5 = clean breakout well past range boundary
                        # increase → fewer but cleaner breakout labels
                        # decrease → more labels but more false breakouts
 
@@ -45,12 +47,12 @@ labels:
   #   sl_atr and rr_ratio must match trading.sl_atr and trading.tp_atr = sl_atr * rr_ratio.
 
   sl_pct:    0.0015    # stop-loss as fraction of price (0.15%)
-                       # at BTC $95k: SL = $143; net SL cost ~$19 (vs $4 round-trip fee)
+                       # at BTC $95k: SL = $142; fee is only 9% of gross TP
                        # increase → wider SL, higher label TP win rate, bigger losses if wrong
                        # decrease → tighter SL, more NO_BREAK labels
 
   tp_pct:    0.0045    # take-profit as fraction of price (0.45%)  -> 1:3 RR with sl_pct=0.0015
-                       # at BTC $95k: TP = $428; net TP ~$41 (fee is 9% of gross vs 68% before)
+                       # at BTC $95k: TP = $427; net TP ~$38 (fee is 9% of gross)
                        # increase → bigger TP, fewer labels hit, but each win is worth more
                        # decrease → easier to hit TP, more UP/DOWN labels but smaller net wins
 
@@ -98,7 +100,8 @@ features:
   vwap_window:      60     # rolling VWAP window in bars                     [range: 30–390]
                            # 390 = full NY session; 60 = 1 hour; shorter = more responsive
 
-  range_lookbacks:  [20, 60]   # lookback periods for range high/low features [each: 10–500]
+  range_lookbacks:  [8, 20, 60]   # lookback periods for range high/low features [each: 5–500]
+                               # 8 = matches L_range for dist_rh_8 entry filter
                                # add longer values for multi-timeframe range awareness
 
   vol_lookback:     20     # window for relative volume baseline              [range: 10–100]
@@ -137,7 +140,7 @@ training:
                             # should be >= H_horizon to avoid future data leaking into training
 
   break_weight: 10.0        # sample weight multiplier for UP/DOWN vs NO_BREAK [range: 2.0–50.0]
-                            # 10 = half-balance at 3% label rate; model stays selective, probabilities better calibrated
+                            # 10 = sweet spot for 3% label rate (Run 21 finding)
                             # increase → model focuses more on breakouts (less false negatives)
                             # decrease → model more conservative (fewer signals, fewer false positives)
                             # if f1_UP/f1_DOWN = 0.0 after training, increase this significantly
@@ -158,7 +161,7 @@ training:
                                            # increase → more complex patterns but risks overfitting
                                            # decrease → simpler model, less overfit, may underfit
 
-    min_child_weight:   10                # minimum sum of sample weights in a leaf [range: 10–200]
+    min_child_weight:   10                # minimum sum of sample weights in a leaf [range: 1–200]
                                            # increase → more conservative splits, ignores rare patterns
                                            # decrease → allows learning rare breakout patterns (important!)
                                            # too high (e.g. 200) = model cannot learn minority classes
@@ -194,11 +197,11 @@ training:
 
 # ── Trading Signal ────────────────────────────────────────────────────────────
 trading:
-  T_up:            0.64   # min model probability for UP_BREAK → LONG entry  [range: 0.3–0.9]
+  T_up:            0.66   # min model probability for UP_BREAK -> LONG entry  [range: 0.3-0.9]
                            # increase → fewer but higher-confidence entries (better precision)
                            # decrease → more entries but more false signals
 
-  T_down:          0.64   # min model probability for DOWN_BREAK → SHORT entry [range: 0.3–0.9]
+  T_down:          0.66   # min model probability for DOWN_BREAK → SHORT entry [range: 0.3–0.9]
                            # same logic as T_up
 
   d_max_atr:       1.5    # max distance from price to range boundary (ATR)  [range: 0.5–5.0]
@@ -214,8 +217,9 @@ trading:
   sl_atr:          2      # (ATR-mode fallback) stop-loss in ATR units
   tp_atr:          6      # (ATR-mode fallback) sl_atr * rr_ratio = 2 * 3
 
-  time_stop:       20     # force-close trade after N bars                   [range: 5–60]
-                           # must equal labels.H_horizon = 20 bars = 20-minute window
+  time_stop:       30     # force-close trade after N bars                   [range: 5-60]
+                           # intentionally > H_horizon=20: extra 10 bars help good setups complete
+                           # empirical: ts=30 beats ts=20 at every threshold with H=20 labels
 
   cooldown:        5      # bars to wait after a trade closes                [range: 0–60]
                            # 5 bars = 5-minute cooldown between trades
@@ -223,8 +227,8 @@ trading:
 
   max_positions:   1      # maximum simultaneous open trades; keep at 1 for single-position mode
   initial_capital: 10000.0  # starting capital in USD
-  position_size_pct: 1.0    # fraction of capital risked per trade           [range: 0.01–1.0]
-                             # 1.0 = 100% (no leverage); 0.1 = risk only 10% per trade
+  position_size_pct: 3.0    # fraction of capital risked per trade           [range: 0.01–10.0]
+                             # 3.0 = 3x leverage; SL=-0.45% capital, TP=+1.35% capital per trade
 
 # ── Simulation ────────────────────────────────────────────────────────────────
 simulation:

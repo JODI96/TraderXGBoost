@@ -42,6 +42,11 @@ def _load_artifacts(art_dir: str = "models"):
     p = Path(art_dir)
     model = xgb.Booster()
     model.load_model(str(p / "xgb_model.json"))
+    # Use GPU for batch prediction if model was trained with CUDA
+    try:
+        model.set_param({"device": "cuda"})
+    except Exception:
+        pass
     with open(p / "feature_columns.json") as f:
         feat_cols = json.load(f)
     with open(p / "thresholds.json") as f:
@@ -54,9 +59,11 @@ def run_backtest(
     df_feat: pd.DataFrame,
     probs: np.ndarray,
     cfg: dict,
-    T_up:    float | None = None,
-    T_down:  float | None = None,
-    d_max:   float | None = None,
+    T_up:      float | None = None,
+    T_down:    float | None = None,
+    d_max:     float | None = None,
+    time_stop: int   | None = None,
+    min_vol:   float | None = None,
 ) -> tuple[pd.DataFrame, np.ndarray, dict]:
     """
     Event-driven simulation; processes one candle at a time.
@@ -87,7 +94,7 @@ def run_backtest(
     sl_pct    = tc.get("sl_pct")
     tp_pct    = tc.get("tp_pct")
     use_pct   = sl_pct is not None and tp_pct is not None
-    time_stop = tc["time_stop"]
+    time_stop = time_stop if time_stop is not None else tc["time_stop"]
     cooldown  = tc["cooldown"]
     req_sq    = tc.get("require_squeeze", False)
     capital0  = tc["initial_capital"]
@@ -101,8 +108,11 @@ def run_backtest(
     # Use atr_short from features (same source as execution.py uses for SL/TP)
     atr    = df_feat["atr_short"].values if "atr_short" in df_feat.columns \
              else np.full(n, np.nan)
-    sq_col = df_feat["squeeze_flag"].values if "squeeze_flag" in df_feat.columns \
-             else np.zeros(n)
+    sq_col    = df_feat["squeeze_flag"].values if "squeeze_flag" in df_feat.columns \
+                else np.zeros(n)
+    vol_regime = df_feat["vol_regime"].values if "vol_regime" in df_feat.columns \
+                 else np.ones(n)
+    min_vol    = min_vol if min_vol is not None else tc.get("min_vol_regime", 0.0)
 
     p_down = probs[:, 0]
     p_up   = probs[:, 2]
@@ -181,12 +191,13 @@ def run_backtest(
 
         # ── Entry logic ───────────────────────────────────────────────────────
         if pos_dir == 0:
-            sq_ok = (not req_sq) or sq_col[i] == 1
+            sq_ok  = (not req_sq) or sq_col[i] == 1
+            vol_ok = vol_regime[i] >= min_vol
 
             # LONG: imminent up-breakout
             if (p_up[i] >= T_u and
                     not np.isnan(dist_rh[i]) and dist_rh[i] <= dmax and
-                    sq_ok):
+                    sq_ok and vol_ok):
                 entry_price  = c
                 pos_size     = (capital * pos_pct) / (c + 1e-9)
                 if use_pct:
@@ -201,7 +212,7 @@ def run_backtest(
             # SHORT: imminent down-breakout
             elif (p_down[i] >= T_d and
                     not np.isnan(dist_rl[i]) and dist_rl[i] <= dmax and
-                    sq_ok):
+                    sq_ok and vol_ok):
                 entry_price  = c
                 pos_size     = (capital * pos_pct) / (c + 1e-9)
                 if use_pct:
@@ -292,10 +303,13 @@ def _plot_equity(equity: np.ndarray, trades: pd.DataFrame, out_path: str) -> Non
 # ─────────────────────────────────────────────────────────────────────────────
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--year",   type=int,   default=None)
-    parser.add_argument("--T_up",   type=float, default=None)
-    parser.add_argument("--T_down", type=float, default=None)
-    parser.add_argument("--d_max",  type=float, default=None)
+    parser.add_argument("--year",      type=int,   default=None)
+    parser.add_argument("--T_up",      type=float, default=None)
+    parser.add_argument("--T_down",    type=float, default=None)
+    parser.add_argument("--d_max",     type=float, default=None)
+    parser.add_argument("--time_stop", type=int,   default=None)
+    parser.add_argument("--min_vol",   type=float, default=None)
+    parser.add_argument("--symbol",    default=None, help="Override symbol (e.g. ETHUSDT)")
     parser.add_argument("--config",    default="config.yaml")
     parser.add_argument("--artifacts", default="models")
     args = parser.parse_args()
@@ -308,12 +322,16 @@ def main() -> None:
     model, feat_cols, thresholds = _load_artifacts(args.artifacts)
 
     # ── Load data ─────────────────────────────────────────────────────────────
+    cfg_tmp = dict(cfg); cfg_tmp["data"] = dict(cfg["data"])
+    if args.symbol:
+        cfg_tmp["data"]["base_dir"] = (
+            f"{cfg['data']['data_root']}/{args.symbol}/full_year"
+        )
     if args.year:
-        cfg_tmp = dict(cfg); cfg_tmp["data"] = dict(cfg["data"])
         cfg_tmp["data"]["years"] = [args.year]
         df_raw = data_mod.load_all(cfg_tmp)
     else:
-        df_raw = data_mod.load_all(cfg)
+        df_raw = data_mod.load_all(cfg_tmp)
         split  = int(len(df_raw) * (1 - cfg["training"]["test_size"]))
         df_raw = df_raw.iloc[split:]
 
@@ -337,12 +355,14 @@ def main() -> None:
     # ── Run backtest ──────────────────────────────────────────────────────────
     print("Running backtest ...")
     trades, equity, report = run_backtest(
-        df_feat = df_all,
-        probs   = probs,
-        cfg     = cfg,
-        T_up    = args.T_up,
-        T_down  = args.T_down,
-        d_max   = args.d_max,
+        df_feat   = df_all,
+        probs     = probs,
+        cfg       = cfg,
+        T_up      = args.T_up,
+        T_down    = args.T_down,
+        d_max     = args.d_max,
+        time_stop = args.time_stop,
+        min_vol   = args.min_vol,
     )
 
     print("\n--- Backtest Report ---")

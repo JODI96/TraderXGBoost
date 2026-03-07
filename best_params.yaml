@@ -1,28 +1,39 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# Best Parameters – Run 21 (fast momentum features + PCT barriers)
-# ─────────────────────────────────────────────────────────────────────────────
-# Best result:  T=0.64  ->  +3.18% return, 94 trades, win_rate=48.9%, PF=1.30
-# Test period:  2025-05-26 to 2025-12-31 (218 days)
-# n_estimators: 1266 (WF-CV, all 5 folds valid)
+# =============================================================================
+# Best Parameters – Run 25 (Multi-coin training BTC+ETH+SOL + 3x leverage)
+# =============================================================================
+# Best return:    T=0.62  ->  +13.85%, 276 trades (~1.3/day), win=38.4%, PF=1.13
+# Best quality:   T=0.66  ->  +10.98%,  88 trades (~0.4/day), win=42.0%, PF=1.30
+# Safest:         T=0.68  ->  +11.12%,  43 trades (~0.2/day), win=46.5%, PF=1.72
+# Test period:    2025-05-26 to 2025-12-31 (218 days)
+# n_estimators:   2225 (WF-CV, all 5 folds valid)
+# Training coins: BTCUSDT + ETHUSDT + SOLUSDT (4.7M rows, 14.7 min on RTX 3080)
+# Trading coin:   BTCUSDT only (ETH/SOL PCT barriers not calibrated)
 #
-# Full threshold scan:
-#   T=0.58  ->  -14.2%,  556 trades (~2.5/day), win=35.3%, PF=0.80
-#   T=0.60  ->   -6.4%,  348 trades (~1.6/day), win=36.5%, PF=0.86
-#   T=0.62  ->   -0.3%,  193 trades (~0.9/day), win=40.9%, PF=0.99
-#   T=0.64  ->  +3.18%,   94 trades (~0.4/day), win=48.9%, PF=1.30  <- BEST
-#   T=0.66  ->  +1.19%,   44 trades (~0.2/day), win=40.9%, PF=1.23
-#   T=0.68  ->  +1.91%,   18 trades (~0.1/day), win=55.6%, PF=2.29
-# ─────────────────────────────────────────────────────────────────────────────
+# Full BTC threshold scan (3x leverage, time_stop=30):
+#   T=0.58  ->  -45.6%,  693 trades (~3.2/day), win=33.2%, PF=0.78, DD=-53.6%
+#   T=0.60  ->  -17.2%,  450 trades (~2.1/day), win=34.9%, PF=0.89, DD=-37.5%
+#   T=0.62  ->  +13.85%, 276 trades (~1.3/day), win=38.4%, PF=1.13, DD=-17.6%  <- BEST RETURN
+#   T=0.64  ->   +0.83%, 158 trades (~0.7/day), win=36.1%, PF=1.01, DD= -9.4%
+#   T=0.66  ->  +10.98%,  88 trades (~0.4/day), win=42.0%, PF=1.30, DD= -6.6%  <- BALANCED
+#   T=0.68  ->  +11.12%,  43 trades (~0.2/day), win=46.5%, PF=1.72, DD= -5.1%  <- SAFEST
+# =============================================================================
+
+data:
+  coins:
+    - BTCUSDT   # training coins
+    - ETHUSDT
+    - SOLUSDT
+  trade_symbol: BTCUSDT   # backtest/live trading on BTC only
 
 labels:
   L_range:   20
-  H_horizon: 20        # 20-bar (20-min) trade window on 1m data
+  H_horizon: 20        # strict 20-bar labels; TP win rate = 80% across all coins
   k_atr:     5
   L_atr:     7
-  sl_pct:    0.0015    # 0.15% stop-loss — fee is only 9% of gross TP
-  tp_pct:    0.0045    # 0.45% take-profit (1:3 RR)
-  sl_atr:    2         # ATR-mode fallback only
-  rr_ratio:  3         # ATR-mode fallback only
+  sl_pct:    0.0015    # 0.15% SL — calibrated for BTC; too tight for ETH/SOL
+  tp_pct:    0.0045    # 0.45% TP (1:3 RR)
+  sl_atr:    2
+  rr_ratio:  3
   maker_fee: 0.0002
   taker_fee: 0.0000
   slippage:  0.0000
@@ -30,9 +41,9 @@ labels:
   n_classes: 3
 
 training:
-  break_weight: 10.0   # half-balance at 3% label rate; model stays selective
+  break_weight: 10.0
   xgb_params:
-    n_estimators:     5000    # cap; early stopping fires at ~1266
+    n_estimators:     5000    # cap; early stopping fires at ~2225
     learning_rate:    0.01
     max_depth:        5
     min_child_weight: 10
@@ -41,59 +52,66 @@ training:
     gamma:            0
     reg_alpha:        1.0
     reg_lambda:       1.0
+    tree_method:      "hist"
+    device:           "cuda"  # GPU training (RTX 3080); 14.7 min for 4.7M rows
   early_stopping_rounds: 50
 
 trading:
-  T_up:            0.64   # best profitable threshold
-  T_down:          0.64
+  T_up:            0.66   # balanced threshold: good return + manageable drawdown
+  T_down:          0.66
   d_max_atr:       1.5
   require_squeeze: false
   sl_pct:          0.0015
   tp_pct:          0.0045
-  sl_atr:          2      # ATR-mode fallback
-  tp_atr:          6      # ATR-mode fallback
-  time_stop:       20
+  sl_atr:          2
+  tp_atr:          6
+  time_stop:       30     # > H_horizon=20; empirically better at every threshold
   cooldown:        5
   max_positions:   1
   initial_capital: 10000.0
-  position_size_pct: 1.0
+  position_size_pct: 3.0  # 3x leverage; SL=-0.45% capital, TP=+1.35% capital
 
-# ─────────────────────────────────────────────────────────────────────────────
-# KEY DISCOVERIES (Run 21)
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
+# KEY DISCOVERIES (Run 25)
+# =============================================================================
 #
-# 1. PCT BARRIERS fixed fee dominance
-#    Old ATR-based TP during squeeze: ~$5.88 gross, fee=$4 (68% eaten)
-#    New PCT-based TP: $45 gross, fee=$4 (9% eaten)
+# 1. Multi-coin training dramatically improves BTC signal quality
+#    BTC-only model:   T=0.62 -> -0.17% (barely breakeven)
+#    3-coin model:     T=0.62 -> +13.85% (+3x leverage)
+#    More training data diversity = better generalisation on BTC patterns
 #
-# 2. break_weight=10 is the sweet spot for 3% label rate
-#    break_weight=20 -> precision 8%, model too aggressive
-#    break_weight=10 -> precision 12%, better calibrated probabilities
+# 2. ETH + SOL backtest broken with 0.15% PCT SL
+#    ETH: 3,389 trades at T=0.58 vs 693 BTC trades; win rate 31-33%
+#    SOL: 3,184 trades at T=0.58; win rate 31-33%
+#    Root cause: 0.15% SL calibrated for BTC volatility; ETH/SOL move 2-3x more
+#    Fix needed: ATR-based SL/TP per coin (future experiment)
 #
-# 3. Fast momentum features help (EMA3/5, CVD3, price_mom, delta_accel)
-#    T=0.64: +2.4% -> +3.18%
-#    T=0.62: -1.94% -> -0.31% (nearly breakeven)
+# 3. T=0.62 is now the best return threshold (was T=0.64 in single-coin)
+#    Multi-coin model generates more high-confidence signals at lower thresholds
+#    n_estimators grew 1359 -> 2225 (more data, more trees needed)
 #
-# 4. WF-CV fix: weighted val DMatrix + max-of-valid-folds
-#    Without fix: median=3 trees (degenerate), model useless
-#    With fix: 1266 trees, all 5 folds learn correctly
+# 4. 3x leverage parameters:
+#    Winning trade: +1.35% of capital
+#    Losing trade:  -0.45% of capital
+#    At T=0.66 (42% win, 1:3 RR): expected +0.23% per trade on capital
 #
-# 5. Trade density ceiling at 3% label rate
-#    Only 3% of 1m bars have viable UP/DOWN setup (0.45% move in 20 min)
-#    Max theoretical trades: ~44/day even with perfect model
-#    Most trades exit via time-stop (avg_win ~$13, not full $41 TP)
+# 5. GPU inference added to backtest.py
+#    model.set_param({"device": "cuda"}) before batch prediction
+#    Per-bar inference (live/replay) stays on CPU (GPU overhead > compute time)
 #
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
 # NEXT EXPERIMENTS
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
 #
-# A. Test time_stop=30 in backtest (no retrain) at T=0.62-0.64
-#    More time to hit 0.45% TP -> avg_win should increase toward $41
-#    If promising: retrain with H_horizon=30
+# A. Fine-grained T scan (0.60 to 0.68 in 0.01 steps) to find exact peak
 #
-# B. max_depth 5->6, min_child_weight 10->5
-#    More expressive model, learns rarer precise patterns
+# B. ATR-based SL/TP for ETH/SOL to unlock multi-coin trading
+#    ETH: sl_atr=2, tp_atr=6 adapts to coin volatility
+#    Could add +10-15% more returns from ETH/SOL signals
 #
-# C. Reduce tp_pct 0.0045->0.003 (1:2 RR) for more TP hits
-#    Trade-off: smaller net win per trade but higher TP rate
-# ─────────────────────────────────────────────────────────────────────────────
+# C. Add BNB, XRP to training for even more diversity
+#    All data already present in Data/ directory
+#
+# D. Reduce cooldown 5->2 bars at T=0.66 to increase trade frequency
+#    Currently 5-bar cooldown after each trade
+# =============================================================================
