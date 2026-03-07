@@ -227,8 +227,15 @@ trading:
 
   max_positions:   1      # maximum simultaneous open trades; keep at 1 for single-position mode
   initial_capital: 10000.0  # starting capital in USD
-  position_size_pct: 3.0    # fraction of capital risked per trade           [range: 0.01–10.0]
+  position_size_pct: 10.0    # fraction of capital risked per trade           [range: 0.01–10.0]
                              # 3.0 = 3x leverage; SL=-0.45% capital, TP=+1.35% capital per trade
+
+# ── Sweep (grid search over T and leverage) ───────────────────────────────────
+sweep:
+  T_values:       [0.58, 0.60, 0.62, 0.64, 0.66, 0.68, 0.70]
+  leverages:      [10.0, 20.0, 30.0]
+  liq_threshold:  0.20     # liquidated when capital < 20% of initial
+  n_sims:         20000    # Monte Carlo simulations per scenario
 
 # ── Simulation ────────────────────────────────────────────────────────────────
 simulation:

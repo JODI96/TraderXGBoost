@@ -38,6 +38,26 @@ import labels as label_mod
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+def _liquidation_prob(win_rate: float, win_pct: float, loss_pct: float,
+                      trades: int, n_sims: int, liq_threshold: float,
+                      rng: np.random.Generator) -> float:
+    """Monte Carlo: fraction of paths where capital drops below liq_threshold."""
+    capital    = np.ones(n_sims, dtype=np.float64)
+    liquidated = np.zeros(n_sims, dtype=bool)
+    chunk = 512
+    done  = 0
+    while done < trades:
+        n    = min(chunk, trades - done)
+        wins = rng.random((n_sims, n)) < win_rate
+        for t in range(n):
+            factor  = np.where(wins[:, t], 1.0 + win_pct, 1.0 - loss_pct)
+            capital = np.where(liquidated, capital, capital * factor)
+            liquidated |= capital < liq_threshold
+        done += n
+    return float(liquidated.mean())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 def _load_artifacts(art_dir: str = "models"):
     p = Path(art_dir)
     model = xgb.Booster()
@@ -257,9 +277,13 @@ def _compute_report(trades: pd.DataFrame, equity: np.ndarray,
     profit_fac = wins.sum() / (-loss.sum() + 1e-9) if len(loss) else float("inf")
     sharpe     = _annualised_sharpe(equity, periods_per_year=525_600)
 
+    active_days = (trades["entry_ts"].dt.date.nunique()
+                   if "entry_ts" in trades.columns else 0)
+
     return {
         "total_return_pct": round(total_ret, 2),
         "n_trades":         len(trades),
+        "active_days":      active_days,
         "win_rate":         round(len(wins) / len(pnls) * 100, 1),
         "profit_factor":    round(profit_fac, 3),
         "sharpe_ratio":     round(sharpe, 3),
@@ -310,6 +334,8 @@ def main() -> None:
     parser.add_argument("--time_stop", type=int,   default=None)
     parser.add_argument("--min_vol",   type=float, default=None)
     parser.add_argument("--symbol",    default=None, help="Override symbol (e.g. ETHUSDT)")
+    parser.add_argument("--pos_size",  type=float, default=None, help="Override position_size_pct (leverage)")
+    parser.add_argument("--sweep",     action="store_true", help="Run grid search over sweep.T_values x sweep.leverages")
     parser.add_argument("--config",    default="config.yaml")
     parser.add_argument("--artifacts", default="models")
     args = parser.parse_args()
@@ -351,6 +377,106 @@ def main() -> None:
     print("Predicting ...")
     dm    = xgb.DMatrix(X.values, feature_names=avail)
     probs = model.predict(dm).reshape(-1, 3)
+
+    # ── Apply pos_size override ───────────────────────────────────────────────
+    if args.pos_size is not None:
+        cfg["trading"]["position_size_pct"] = args.pos_size
+
+    # ── Sweep mode ────────────────────────────────────────────────────────────
+    if args.sweep:
+        sc         = cfg.get("sweep", {})
+        T_values   = sc.get("T_values",  [0.60, 0.62, 0.64, 0.66, 0.68])
+        leverages  = sc.get("leverages", [cfg["trading"]["position_size_pct"]])
+        liq_thresh = sc.get("liq_threshold", 0.20)
+        n_sims     = sc.get("n_sims", 10_000)
+        tp_pct     = cfg["labels"].get("tp_pct", cfg["trading"].get("tp_pct", 0.0045))
+        sl_pct     = cfg["labels"].get("sl_pct", cfg["trading"].get("sl_pct", 0.0015))
+        rng        = np.random.default_rng(42)
+        test_days  = 218  # approximate length of test split in calendar days
+
+        W = 100
+        col_hdr = (
+            f"  {'T':>5}  {'Ret%':>6}  {'Ann%':>6}  {'Trd':>4}  {'Days':>4}  "
+            f"{'Trd/d':>5}  {'Win%':>5}  {'PF':>5}  {'MaxDD%':>7}  "
+            f"  {'P(-30%)':>8}  {'P(-50%)':>8}  {'P(-80%)':>8}"
+        )
+
+        print(f"\n{'=' * W}")
+        print(f"  SWEEP  |  test={test_days}d  |  MC risk: {n_sims:,} paths/scenario  |  "
+              f"P(-X%) = prob capital drops >=X% at any point in 1 yr")
+        print(f"{'=' * W}")
+        print(col_hdr)
+
+        for lev in leverages:
+            cfg["trading"]["position_size_pct"] = lev
+            win_pct  = lev * tp_pct
+            loss_pct = lev * sl_pct
+            print(f"\n  {'─' * (W - 2)}")
+            print(f"  Leverage {lev:.0f}x  "
+                  f"(TP/trade={win_pct*100:.2f}%  SL/trade={loss_pct*100:.3f}%)")
+            print(f"  {'─' * (W - 2)}")
+
+            for T in T_values:
+                _, _, rep = run_backtest(
+                    df_feat=df_all, probs=probs, cfg=cfg,
+                    T_up=T, T_down=T,
+                    d_max=args.d_max, time_stop=args.time_stop, min_vol=args.min_vol,
+                )
+                if "error" in rep:
+                    print(f"  T={T:.2f}  (no trades)")
+                    continue
+
+                wr        = rep["win_rate"] / 100.0
+                n_trades  = rep["n_trades"]
+                tpd       = n_trades / test_days
+                trades_yr = int(tpd * 365)
+                ann_ret   = rep["total_return_pct"] * (365.0 / test_days)
+
+                # Use ACTUAL observed avg_win / avg_loss from the backtest
+                # (not theoretical TP/SL) so that time-stop exits are reflected.
+                ic = cfg["trading"]["initial_capital"]
+                win_pct_mc  = rep["avg_win"]  / ic        # avg win as fraction of starting capital
+                loss_pct_mc = -rep["avg_loss"] / ic       # avg loss as fraction of starting capital (positive)
+                # Fallback to theoretical if no wins/losses observed
+                if win_pct_mc <= 0:
+                    win_pct_mc = win_pct
+                if loss_pct_mc <= 0:
+                    loss_pct_mc = loss_pct
+
+                # Monte Carlo: prob of capital dropping below threshold at any
+                # point during 1 year.  thresholds: 0.70 (-30%), 0.50 (-50%),
+                # 0.20 (-80% / near-ruin)
+                p30 = _liquidation_prob(wr, win_pct_mc, loss_pct_mc, trades_yr, n_sims, 0.70, rng)
+                p50 = _liquidation_prob(wr, win_pct_mc, loss_pct_mc, trades_yr, n_sims, 0.50, rng)
+                p80 = _liquidation_prob(wr, win_pct_mc, loss_pct_mc, trades_yr, n_sims, liq_thresh, rng)
+
+                flag = "  ***" if rep["profit_factor"] >= 1.20 and n_trades >= 50 else \
+                       "  *"   if rep["profit_factor"] >= 1.05 and n_trades >= 30 else ""
+
+                print(
+                    f"  {T:.2f}  "
+                    f"{rep['total_return_pct']:>+6.1f}%  "
+                    f"{ann_ret:>+6.1f}%  "
+                    f"{n_trades:>4}  "
+                    f"{rep['active_days']:>4}  "
+                    f"{tpd:>5.2f}  "
+                    f"{rep['win_rate']:>5.1f}%  "
+                    f"{rep['profit_factor']:>5.2f}  "
+                    f"{rep['max_drawdown_pct']:>7.1f}%  "
+                    f"  {p30*100:>6.1f}%  "
+                    f"{p50*100:>6.1f}%  "
+                    f"{p80*100:>6.1f}%"
+                    f"{flag}"
+                )
+
+        print(f"\n{'=' * W}")
+        print(f"  Ann%   = annualised return extrapolated from {test_days}-day test")
+        print(f"  Trd/d  = trades per calendar day")
+        print(f"  P(-X%) = Monte Carlo prob of experiencing a -30%/-50%/-80% drawdown at any point in 1 yr")
+        print(f"  ***    = PF >= 1.20 and >= 50 trades  (statistically meaningful)")
+        print(f"  *      = PF >= 1.05 and >= 30 trades  (moderate sample)")
+        print(f"{'=' * W}")
+        return
 
     # ── Run backtest ──────────────────────────────────────────────────────────
     print("Running backtest ...")
