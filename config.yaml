@@ -232,7 +232,7 @@ trading:
 
 # ── Sweep (grid search over T and leverage) ───────────────────────────────────
 sweep:
-  T_values:       [0.58, 0.60, 0.62, 0.64, 0.66, 0.68, 0.70]
+  T_values:       [0.58, 0.60, 0.62, 0.64, 0.66, 0.67, 0.68, 0.69, 0.70]
   leverages:      [10.0, 20.0, 30.0]
   liq_threshold:  0.20     # liquidated when capital < 20% of initial
   n_sims:         20000    # Monte Carlo simulations per scenario
