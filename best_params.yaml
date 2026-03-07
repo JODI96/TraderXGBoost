@@ -1,19 +1,28 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Best Configuration – Checkpoint (profitable at T=0.64)
+# Best Parameters – Run 21 (fast momentum features + PCT barriers)
 # ─────────────────────────────────────────────────────────────────────────────
-# Result:  +2.4% return, 83 trades (~0.4/day), win_rate=44.6%, PF=1.241
-# Test period: 2025-05-26 to 2025-12-31 (218 days)
+# Best result:  T=0.64  ->  +3.18% return, 94 trades, win_rate=48.9%, PF=1.30
+# Test period:  2025-05-26 to 2025-12-31 (218 days)
+# n_estimators: 1266 (WF-CV, all 5 folds valid)
+#
+# Full threshold scan:
+#   T=0.58  ->  -14.2%,  556 trades (~2.5/day), win=35.3%, PF=0.80
+#   T=0.60  ->   -6.4%,  348 trades (~1.6/day), win=36.5%, PF=0.86
+#   T=0.62  ->   -0.3%,  193 trades (~0.9/day), win=40.9%, PF=0.99
+#   T=0.64  ->  +3.18%,   94 trades (~0.4/day), win=48.9%, PF=1.30  <- BEST
+#   T=0.66  ->  +1.19%,   44 trades (~0.2/day), win=40.9%, PF=1.23
+#   T=0.68  ->  +1.91%,   18 trades (~0.1/day), win=55.6%, PF=2.29
 # ─────────────────────────────────────────────────────────────────────────────
 
 labels:
   L_range:   20
-  H_horizon: 20        # 20-bar (20-min) trade window
+  H_horizon: 20        # 20-bar (20-min) trade window on 1m data
   k_atr:     5
   L_atr:     7
-  sl_pct:    0.0015    # 0.15% stop-loss
+  sl_pct:    0.0015    # 0.15% stop-loss — fee is only 9% of gross TP
   tp_pct:    0.0045    # 0.45% take-profit (1:3 RR)
-  sl_atr:    2         # fallback only
-  rr_ratio:  3         # fallback only
+  sl_atr:    2         # ATR-mode fallback only
+  rr_ratio:  3         # ATR-mode fallback only
   maker_fee: 0.0002
   taker_fee: 0.0000
   slippage:  0.0000
@@ -21,9 +30,9 @@ labels:
   n_classes: 3
 
 training:
-  break_weight: 10.0   # half-balance for 3% label rate; good calibration
+  break_weight: 10.0   # half-balance at 3% label rate; model stays selective
   xgb_params:
-    n_estimators:     5000
+    n_estimators:     5000    # cap; early stopping fires at ~1266
     learning_rate:    0.01
     max_depth:        5
     min_child_weight: 10
@@ -33,17 +42,16 @@ training:
     reg_alpha:        1.0
     reg_lambda:       1.0
   early_stopping_rounds: 50
-  # WF-CV selected n_estimators: 1235 trees (all 5 folds valid)
 
 trading:
-  T_up:            0.64   # profitable threshold
+  T_up:            0.64   # best profitable threshold
   T_down:          0.64
   d_max_atr:       1.5
   require_squeeze: false
   sl_pct:          0.0015
   tp_pct:          0.0045
-  sl_atr:          2      # fallback
-  tp_atr:          6      # fallback
+  sl_atr:          2      # ATR-mode fallback
+  tp_atr:          6      # ATR-mode fallback
   time_stop:       20
   cooldown:        5
   max_positions:   1
@@ -51,9 +59,41 @@ trading:
   position_size_pct: 1.0
 
 # ─────────────────────────────────────────────────────────────────────────────
-# NEXT DIRECTION: faster trend reaction
-# Problem: DOWN/UP probability increases too slowly when trend starts moving.
-# Trend features (EMA9, trend30_window=30) lag by 5-15 bars.
-# Fix: add fast momentum features (EMA3/5, 3-bar CVD, price acceleration)
-# and retrain so model responds within 2-3 bars of trend change.
+# KEY DISCOVERIES (Run 21)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# 1. PCT BARRIERS fixed fee dominance
+#    Old ATR-based TP during squeeze: ~$5.88 gross, fee=$4 (68% eaten)
+#    New PCT-based TP: $45 gross, fee=$4 (9% eaten)
+#
+# 2. break_weight=10 is the sweet spot for 3% label rate
+#    break_weight=20 -> precision 8%, model too aggressive
+#    break_weight=10 -> precision 12%, better calibrated probabilities
+#
+# 3. Fast momentum features help (EMA3/5, CVD3, price_mom, delta_accel)
+#    T=0.64: +2.4% -> +3.18%
+#    T=0.62: -1.94% -> -0.31% (nearly breakeven)
+#
+# 4. WF-CV fix: weighted val DMatrix + max-of-valid-folds
+#    Without fix: median=3 trees (degenerate), model useless
+#    With fix: 1266 trees, all 5 folds learn correctly
+#
+# 5. Trade density ceiling at 3% label rate
+#    Only 3% of 1m bars have viable UP/DOWN setup (0.45% move in 20 min)
+#    Max theoretical trades: ~44/day even with perfect model
+#    Most trades exit via time-stop (avg_win ~$13, not full $41 TP)
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# NEXT EXPERIMENTS
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# A. Test time_stop=30 in backtest (no retrain) at T=0.62-0.64
+#    More time to hit 0.45% TP -> avg_win should increase toward $41
+#    If promising: retrain with H_horizon=30
+#
+# B. max_depth 5->6, min_child_weight 10->5
+#    More expressive model, learns rarer precise patterns
+#
+# C. Reduce tp_pct 0.0045->0.003 (1:2 RR) for more TP hits
+#    Trade-off: smaller net win per trade but higher TP rate
 # ─────────────────────────────────────────────────────────────────────────────
