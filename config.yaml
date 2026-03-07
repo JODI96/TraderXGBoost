@@ -180,7 +180,8 @@ training:
     reg_lambda:         1.0               # L2 regularisation (smoothness)    [range: 0.1–10.0]
                                            # increase → shrinks all feature weights
 
-    tree_method:        "hist"            # fast histogram-based training; do not change
+    tree_method:        "hist"            # fast histogram-based training
+    device:             "cuda"            # use GPU (NVIDIA RTX 3080); remove if no GPU available
     eval_metric:        "mlogloss"        # validation metric for early stopping; do not change
     seed:               42                # random seed for reproducibility
     verbosity:          0                 # 0=silent, 1=warnings, 2=info      [range: 0–2]
