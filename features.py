@@ -395,6 +395,33 @@ def compute_features(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
         ((emas[9] < emas[21]) & (emas[21] < emas[50])).astype(int)
     )
 
+    # ── F2: Fast Momentum Features (react within 2-5 bars of trend change) ───
+    # These give the model early warning of trend acceleration/deceleration,
+    # letting it raise UP/DOWN probability faster than the slower EMA/trend30 features.
+
+    # Ultra-fast EMAs: react to price direction within 2-3 bars
+    ema3 = df["close"].ewm(span=3, min_periods=2, adjust=False).mean()
+    ema5 = df["close"].ewm(span=5, min_periods=3, adjust=False).mean()
+    df["ema3_slope"]  = _slope(ema3, 2)           # 2-bar normalised slope
+    df["ema5_slope"]  = _slope(ema5, 3)           # 3-bar normalised slope
+    df["ema3_5_diff"] = (ema3 - ema5) / (atr_short + 1e-9)  # fast crossover
+
+    # Price momentum & acceleration: how fast is price moving RIGHT NOW
+    df["price_mom_3"] = (df["close"] - df["close"].shift(3)) / (df["close"].shift(3) + 1e-9)
+    df["price_mom_5"] = (df["close"] - df["close"].shift(5)) / (df["close"].shift(5) + 1e-9)
+    # Acceleration: is the momentum speeding up or slowing down?
+    df["price_accel"] = df["price_mom_3"] - df["price_mom_3"].shift(3)
+
+    # Fast CVD: 3-bar delta captures immediate order flow pressure
+    df["cvd_3"]        = delta.rolling(3, min_periods=1).sum()
+    df["cvd_3_slope"]  = _slope(df["cvd_3"], 3)
+    # Delta acceleration: is buying/selling pressure intensifying?
+    df["delta_accel"]  = df["delta_ratio"] - df["delta_ratio"].shift(3)
+
+    # Trend acceleration: is the EMA9-21 spread widening or narrowing?
+    # Positive = trend strengthening; negative = trend fading
+    df["ema_diff_accel"] = df["ema9_21_diff"] - df["ema9_21_diff"].shift(5)
+
     # ── G: MTF Features (5m & 15m, derived from 1m via causal resampling) ───
     if isinstance(df.index, pd.DatetimeIndex) and len(df) >= 20:
         for rule, suffix in [("5min", "5m"), ("15min", "15m")]:

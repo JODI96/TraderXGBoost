@@ -25,8 +25,9 @@ labels:
   L_range:   20        # bars to look back for range high/low              [range: 5–60]
                        # increase → wider/more stable range; decrease → tighter/noisier range
 
-  H_horizon: 15        # bars to look ahead for the breakout target         [range: 5–60]
+  H_horizon: 20        # bars to look ahead for the breakout target         [range: 5–60]
                        # must equal trading.time_stop
+                       # 20 bars = 20-minute trade window on 1m data
                        # increase → more time to hit TP, more UP/DOWN labels, but trades take longer
                        # decrease → fewer labels, model sees less, faster trades
 
@@ -38,15 +39,23 @@ labels:
                        # increase → smoother/slower ATR; decrease → faster/noisier ATR
 
   # Barrier label: bar is labeled UP/DOWN only if price hits TP before SL within H_horizon bars.
-  # sl_atr and rr_ratio must match trading.sl_atr and trading.tp_atr = sl_atr * rr_ratio.
-  sl_atr:    2         # stop-loss distance in ATR for label barrier         [range: 5–50]
-                       # must match trading.sl_atr
-                       # increase → wider SL, harder to get stopped out during labeling → more UP/DOWN labels
-                       # decrease → tighter SL, more NO_BREAK labels, harder for model to learn
+  # Fixed-percentage mode (active when sl_pct + tp_pct are present):
+  #   TP/SL are a fixed % of entry price — fee overhead stays low even in low-ATR squeezes.
+  # ATR-mode fallback (used if sl_pct/tp_pct are absent):
+  #   sl_atr and rr_ratio must match trading.sl_atr and trading.tp_atr = sl_atr * rr_ratio.
 
-  rr_ratio:  3.5       # reward:risk ratio → TP = sl_atr * rr_ratio * ATR  [range: 1.5–5.0]
-                       # increase → bigger TP target, fewer labels hit TP, harder to learn
-                       # decrease → smaller TP, easier to hit, more UP/DOWN labels but smaller wins
+  sl_pct:    0.0015    # stop-loss as fraction of price (0.15%)
+                       # at BTC $95k: SL = $143; net SL cost ~$19 (vs $4 round-trip fee)
+                       # increase → wider SL, higher label TP win rate, bigger losses if wrong
+                       # decrease → tighter SL, more NO_BREAK labels
+
+  tp_pct:    0.0045    # take-profit as fraction of price (0.45%)  -> 1:3 RR with sl_pct=0.0015
+                       # at BTC $95k: TP = $428; net TP ~$41 (fee is 9% of gross vs 68% before)
+                       # increase → bigger TP, fewer labels hit, but each win is worth more
+                       # decrease → easier to hit TP, more UP/DOWN labels but smaller net wins
+
+  sl_atr:    2         # (ATR-mode fallback) stop-loss in ATR units
+  rr_ratio:  3         # (ATR-mode fallback) TP = sl_atr * rr_ratio * ATR
 
   # Round-trip trading costs (as fractions). Used to filter unprofitable labels.
   maker_fee:  0.0002   # fee per leg for limit orders (0.02%)               [range: 0.0001–0.001]
@@ -76,7 +85,8 @@ features:
                            # squeeze = BB inside KC
                            # increase → easier to trigger squeeze; decrease → harder to trigger
 
-  ema_periods:      [9, 21, 50, 200]  # EMA lengths for trend features; add/remove as needed
+  ema_periods:      [9, 21, 50, 200]  # EMA lengths for slow trend features; add/remove as needed
+                                      # fast EMAs (3, 5) are always computed in the F2 momentum block
                                       # typical values: 5, 9, 21, 50, 100, 200
 
   cvd_window:       10     # fast rolling window for cumulative volume delta  [range: 5–60]
@@ -95,8 +105,9 @@ features:
                            # increase → compares to longer baseline; decrease → shorter baseline
 
   # ── 30-minute trend filter ────────────────────────────────────────────────
-  trend30_window:       30     # bars for short-term trend detection          [range: 10–60]
-                               # 30 bars = 30 min on 1m data; increase for smoother/slower detection
+  trend30_window:       10     # bars for short-term trend detection          [range: 5–60]
+                               # 10 bars = 10 min on 1m data — faster regime detection
+                               # reduced from 30 to make model react quicker to trend changes
 
   trend30_slope_thresh: 0.02   # min |normalised slope| to classify as trending [range: 0.001–0.01]
                                # increase → stricter trending definition; decrease → more bars trend-labeled
@@ -125,7 +136,8 @@ training:
   gap_candles:  30          # bars removed between train and val             [range: >= H_horizon]
                             # should be >= H_horizon to avoid future data leaking into training
 
-  break_weight: 4.0         # sample weight multiplier for UP/DOWN vs NO_BREAK [range: 2.0–50.0]
+  break_weight: 10.0        # sample weight multiplier for UP/DOWN vs NO_BREAK [range: 2.0–50.0]
+                            # 10 = half-balance at 3% label rate; model stays selective, probabilities better calibrated
                             # increase → model focuses more on breakouts (less false negatives)
                             # decrease → model more conservative (fewer signals, fewer false positives)
                             # if f1_UP/f1_DOWN = 0.0 after training, increase this significantly
@@ -181,11 +193,11 @@ training:
 
 # ── Trading Signal ────────────────────────────────────────────────────────────
 trading:
-  T_up:            0.58   # min model probability for UP_BREAK → LONG entry  [range: 0.3–0.9]
+  T_up:            0.64   # min model probability for UP_BREAK → LONG entry  [range: 0.3–0.9]
                            # increase → fewer but higher-confidence entries (better precision)
                            # decrease → more entries but more false signals
 
-  T_down:          0.58   # min model probability for DOWN_BREAK → SHORT entry [range: 0.3–0.9]
+  T_down:          0.64   # min model probability for DOWN_BREAK → SHORT entry [range: 0.3–0.9]
                            # same logic as T_up
 
   d_max_atr:       1.5    # max distance from price to range boundary (ATR)  [range: 0.5–5.0]
@@ -195,21 +207,17 @@ trading:
   require_squeeze: false  # if true, only enter when squeeze_flag=1
                            # set true for higher quality entries at cost of fewer trades
 
-  sl_atr:          2      # stop-loss distance in ATR                        [range: 5–50]
-                           # must match labels.sl_atr
-                           # increase → wider stop, survives more noise, bigger loss if wrong
-                           # decrease → tighter stop, exits quickly, more false stops
+  sl_pct:          0.0015  # stop-loss as fraction of price (must match labels.sl_pct)
+  tp_pct:          0.0045  # take-profit as fraction of price (must match labels.tp_pct)
 
-  tp_atr:          7      # take-profit distance in ATR (= sl_atr * rr_ratio) [range: sl_atr*1.5 – sl_atr*5]
-                           # must equal sl_atr * rr_ratio
-                           # increase → bigger target, fewer TPs hit; decrease → easier to hit TP
+  sl_atr:          2      # (ATR-mode fallback) stop-loss in ATR units
+  tp_atr:          6      # (ATR-mode fallback) sl_atr * rr_ratio = 2 * 3
 
-  time_stop:       15     # force-close trade after N bars                   [range: 5–60]
-                           # must equal labels.H_horizon
-                           # increase → more time to reach TP; decrease → exits sooner
+  time_stop:       20     # force-close trade after N bars                   [range: 5–60]
+                           # must equal labels.H_horizon = 20 bars = 20-minute window
 
-  cooldown:        30     # bars to wait after a trade closes                [range: 0–20]
-                           # increase → fewer total trades, avoids re-entering bad conditions
+  cooldown:        5      # bars to wait after a trade closes                [range: 0–60]
+                           # 5 bars = 5-minute cooldown between trades
                            # decrease → more trades, can re-enter immediately
 
   max_positions:   1      # maximum simultaneous open trades; keep at 1 for single-position mode
@@ -229,5 +237,3 @@ simulation:
     ws_url:            "wss://stream.binance.com:9443/ws"
     log_file:          "sim/logs/live_log.jsonl"
 
-
-    #"Continue the trading system optimization. We did 20 runs and found the best params in best_params.yaml. The problem is fee dominance at low-ATR entries."

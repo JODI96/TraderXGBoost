@@ -82,8 +82,11 @@ def run_backtest(
     T_d  = T_down  or tc["T_down"]
     dmax = d_max   or tc["d_max_atr"]
 
-    sl_atr    = tc["sl_atr"]
-    tp_atr    = tc["tp_atr"]
+    sl_atr    = tc.get("sl_atr", 2)
+    tp_atr    = tc.get("tp_atr", 7)
+    sl_pct    = tc.get("sl_pct")
+    tp_pct    = tc.get("tp_pct")
+    use_pct   = sl_pct is not None and tp_pct is not None
     time_stop = tc["time_stop"]
     cooldown  = tc["cooldown"]
     req_sq    = tc.get("require_squeeze", False)
@@ -105,10 +108,11 @@ def run_backtest(
     p_up   = probs[:, 2]
 
     # Use pre-computed distance features from df_feat (same as execution.py)
-    dist_rh = df_feat["dist_rh_20"].values if "dist_rh_20" in df_feat.columns \
-              else np.full(n, np.nan)
-    dist_rl = df_feat["dist_rl_20"].values if "dist_rl_20" in df_feat.columns \
-              else np.full(n, np.nan)
+    L_range = lc.get("L_range", 20)
+    rh_col  = f"dist_rh_{L_range}"
+    rl_col  = f"dist_rl_{L_range}"
+    dist_rh = df_feat[rh_col].values if rh_col in df_feat.columns else np.full(n, np.nan)
+    dist_rl = df_feat[rl_col].values if rl_col in df_feat.columns else np.full(n, np.nan)
 
     capital      = capital0
     pos_dir      = 0          # 0=flat, 1=long, -1=short
@@ -185,8 +189,12 @@ def run_backtest(
                     sq_ok):
                 entry_price  = c
                 pos_size     = (capital * pos_pct) / (c + 1e-9)
-                sl_price     = entry_price - sl_atr * atr[i]
-                tp_price     = entry_price + tp_atr * atr[i]
+                if use_pct:
+                    sl_price = entry_price * (1.0 - sl_pct)
+                    tp_price = entry_price * (1.0 + tp_pct)
+                else:
+                    sl_price = entry_price - sl_atr * atr[i]
+                    tp_price = entry_price + tp_atr * atr[i]
                 pos_dir      = 1
                 entry_idx    = i
 
@@ -196,8 +204,12 @@ def run_backtest(
                     sq_ok):
                 entry_price  = c
                 pos_size     = (capital * pos_pct) / (c + 1e-9)
-                sl_price     = entry_price + sl_atr * atr[i]
-                tp_price     = entry_price - tp_atr * atr[i]
+                if use_pct:
+                    sl_price = entry_price * (1.0 + sl_pct)
+                    tp_price = entry_price * (1.0 - tp_pct)
+                else:
+                    sl_price = entry_price + sl_atr * atr[i]
+                    tp_price = entry_price - tp_atr * atr[i]
                 pos_dir      = -1
                 entry_idx    = i
 

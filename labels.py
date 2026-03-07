@@ -87,10 +87,21 @@ def compute_labels(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     close_v = df["close"].values
     atr_v   = atr.values
 
-    tp_up_v   = close_v + tp_m * atr_v    # long TP
-    sl_up_v   = close_v - sl_m * atr_v    # long SL
-    tp_down_v = close_v - tp_m * atr_v    # short TP
-    sl_down_v = close_v + sl_m * atr_v    # short SL
+    sl_pct = lc.get("sl_pct")
+    tp_pct = lc.get("tp_pct")
+    if sl_pct is not None and tp_pct is not None:
+        # Fixed-percentage barriers: TP/SL in dollar terms is stable across ATR regimes,
+        # so fee overhead stays low even during squeeze entries.
+        tp_up_v   = close_v * (1.0 + tp_pct)
+        sl_up_v   = close_v * (1.0 - sl_pct)
+        tp_down_v = close_v * (1.0 - tp_pct)
+        sl_down_v = close_v * (1.0 + sl_pct)
+    else:
+        # ATR-based barriers (legacy fallback)
+        tp_up_v   = close_v + tp_m * atr_v
+        sl_up_v   = close_v - sl_m * atr_v
+        tp_down_v = close_v - tp_m * atr_v
+        sl_down_v = close_v + sl_m * atr_v
 
     # ── Future high/low matrices  shape (n, H) ────────────────────────────────
     # h_shifts[t, i] = high[t + i + 1]  (i = 0 → bar t+1)

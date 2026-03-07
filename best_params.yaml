@@ -1,20 +1,19 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Best Parameters Found – 20-Run Optimization
+# Best Configuration – Checkpoint (profitable at T=0.64)
 # ─────────────────────────────────────────────────────────────────────────────
-# Best model by precision:  Run 19  (UP=0.29, DOWN=0.28)
-# Best result by drawdown:  Run 20  (total_return=-10.48%, max_dd=-10.55%)
-# No run achieved positive profit_factor. See ANALYSIS section below.
+# Result:  +2.4% return, 83 trades (~0.4/day), win_rate=44.6%, PF=1.241
+# Test period: 2025-05-26 to 2025-12-31 (218 days)
 # ─────────────────────────────────────────────────────────────────────────────
-
-# === BEST OVERALL CONFIG (Run 20 – least loss, controlled drawdown) ===
 
 labels:
-  L_range:   20        # CRITICAL: must match backtest.py dist_rh_20 filter
-  H_horizon: 15        # must equal trading.time_stop
-  k_atr:     5         # breakout threshold past range boundary
-  L_atr:     7         # EWM-7 smoothed ATR for label barriers (key: filters low-vol entries)
-  sl_atr:    2
-  rr_ratio:  3.5       # tp = 2 * 3.5 = 7 ATR (high RR needed to overcome fee drag)
+  L_range:   20
+  H_horizon: 20        # 20-bar (20-min) trade window
+  k_atr:     5
+  L_atr:     7
+  sl_pct:    0.0015    # 0.15% stop-loss
+  tp_pct:    0.0045    # 0.45% take-profit (1:3 RR)
+  sl_atr:    2         # fallback only
+  rr_ratio:  3         # fallback only
   maker_fee: 0.0002
   taker_fee: 0.0000
   slippage:  0.0000
@@ -22,75 +21,39 @@ labels:
   n_classes: 3
 
 training:
-  break_weight: 4.0    # LOW weight = conservative model = higher precision (28-29%)
-                       # HIGH weight (10-25) = model fires everywhere = low precision (13-16%)
+  break_weight: 10.0   # half-balance for 3% label rate; good calibration
   xgb_params:
-    n_estimators:     5000    # allow up to 5000; early stopping fires at ~650-770
+    n_estimators:     5000
     learning_rate:    0.01
-    max_depth:        5       # more expressive than baseline depth=3
-    min_child_weight: 10      # lower than baseline = learns rarer patterns
+    max_depth:        5
+    min_child_weight: 10
     subsample:        0.60
     colsample_bytree: 0.70
-    gamma:            0       # no min split requirement
-    reg_alpha:        1.0     # light L1
-    reg_lambda:       1.0     # light L2
+    gamma:            0
+    reg_alpha:        1.0
+    reg_lambda:       1.0
   early_stopping_rounds: 50
+  # WF-CV selected n_estimators: 1235 trees (all 5 folds valid)
 
 trading:
-  T_up:            0.58   # lower threshold needed with conservative (low-prob) model
-  T_down:          0.58
+  T_up:            0.64   # profitable threshold
+  T_down:          0.64
   d_max_atr:       1.5
   require_squeeze: false
-  sl_atr:          2
-  tp_atr:          7      # must equal labels.sl_atr * labels.rr_ratio = 2 * 3.5
-  time_stop:       15     # must equal labels.H_horizon
-  cooldown:        30
+  sl_pct:          0.0015
+  tp_pct:          0.0045
+  sl_atr:          2      # fallback
+  tp_atr:          6      # fallback
+  time_stop:       20
+  cooldown:        5
   max_positions:   1
   initial_capital: 10000.0
   position_size_pct: 1.0
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ROOT CAUSE ANALYSIS – Why positive profit was not achieved
-# ─────────────────────────────────────────────────────────────────────────────
-#
-# 1. FEE vs ATR MISMATCH (primary killer)
-#    Fee per trade = capital * position_size_pct * 0.0004 = $4 (at full capital)
-#    Gross TP = (capital/BTC_price) * tp_atr * ATR_at_entry
-#    During squeeze entries: ATR ~ $5-10/bar, BTC ~ $95k
-#      -> position = 10000/95000 = 0.105 BTC
-#      -> gross TP = 0.105 * 7 * $8 = $5.88 -> net TP = $1.88 (fee eats 68% of TP!)
-#    The model tends to enter during SQUEEZE conditions (breakout anticipation)
-#    which is exactly when ATR is suppressed -> TP dollar amount is small.
-#    EVIDENCE: avg_raw_pnl on TP exits = $5.36, avg_raw_pnl on SL exits = $2.71
-#    This shows TP entries have LOWER ATR than SL entries (model enters more
-#    during low-vol which correctly predicts breakout direction but not magnitude).
-#
-# 2. MODEL PRECISION CEILING ~28-29% (secondary issue)
-#    Despite 20 training runs with many param combinations, UP/DOWN precision
-#    never exceeded 29%. At 29% precision with 70-82% label TP win rate:
-#      Actual TP hit rate = 0.29 * 0.82 = 23.8% of trades
-#    For positive EV at this TP rate with 3.5:1 RR:
-#      EV = 0.238 * 7 - 0.762 * 2 = 1.67 - 1.52 = +0.15 ATR units (barely positive)
-#    But after dollar fee conversion in low-ATR environments, EV turns negative.
-#
-# 3. KEY CONFIG DISCOVERIES
-#    - break_weight=4 (not 10-25) gives BEST precision: 28-29% vs 13-21%
-#      because conservative model only fires on genuine signals
-#    - L_atr=7 (not 1) gives BEST label TP win rate: 82% vs 70%
-#      because smooth ATR creates more consistent barriers, filtering fake breakouts
-#    - rr_ratio=3.5 (tp_atr=7) is NECESSARY because fee is fixed $4:
-#      at tp_atr=4, gross TP at squeeze ATR = $2-4 -> net often negative even on TP
-#    - L_range MUST be 20 (hardcoded in backtest.py's dist_rh_20 entry filter)
-#    - max_depth=5 + colsample=0.70 + gamma=0 gives more expressive model
-#    - Early stopping fires at 649-766 trees with break_weight=4 (model converges!)
-#      vs hitting 3000 cap with break_weight=10-25 (model never converges)
-#
-# 4. REQUIRED CODE CHANGES FOR PROFITABILITY (outside config scope)
-#    a) Minimum ATR filter: skip entry if current ATR < threshold_atr_usd
-#       This ensures TP dollar amount always >> fee
-#    b) Fixed-dollar SL/TP instead of ATR-based:
-#       sl_usd and tp_usd fixed in dollars, independent of ATR
-#    c) Volatility regime filter: only trade during high-ATR market conditions
-#    d) Better feature engineering: add explicit ATR-regime features that
-#       the model can use to distinguish high/low vol opportunities
+# NEXT DIRECTION: faster trend reaction
+# Problem: DOWN/UP probability increases too slowly when trend starts moving.
+# Trend features (EMA9, trend30_window=30) lag by 5-15 bars.
+# Fix: add fast momentum features (EMA3/5, 3-bar CVD, price acceleration)
+# and retrain so model responds within 2-3 bars of trend change.
 # ─────────────────────────────────────────────────────────────────────────────
