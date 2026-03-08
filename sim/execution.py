@@ -48,8 +48,9 @@ class ExecutionEngine:
         self.tp_pct    = tc.get("tp_pct")
         self.time_stop = tc["time_stop"]
         self.pos_pct   = tc["position_size_pct"]
-        self.req_sq    = tc.get("require_squeeze", False)
-        self.L_range   = lc.get("L_range", 20)
+        self.req_sq       = tc.get("require_squeeze", False)
+        self.min_ema9_21  = tc.get("min_ema9_21_diff", -999.0)
+        self.L_range      = lc.get("L_range", 20)
 
         self.cost_rt = (lc["maker_fee"] + lc["taker_fee"] +
                         lc["slippage"]  + lc["spread"]) * 2
@@ -80,12 +81,13 @@ class ExecutionEngine:
             return float(features.get(col, default)) \
                    if hasattr(features, "get") else default
 
-        atr      = _f("atr_short", _f("atr", 0.0))
-        high     = _f("high",  price)
-        low      = _f("low",   price)
-        dist_rh  = _f(f"dist_rh_{self.L_range}", np.nan)
-        dist_rl  = _f(f"dist_rl_{self.L_range}", np.nan)
-        squeeze  = int(_f("squeeze_flag", 0))
+        atr          = _f("atr_short", _f("atr", 0.0))
+        high         = _f("high",  price)
+        low          = _f("low",   price)
+        dist_rh      = _f(f"dist_rh_{self.L_range}", np.nan)
+        dist_rl      = _f(f"dist_rl_{self.L_range}", np.nan)
+        squeeze      = int(_f("squeeze_flag", 0))
+        ema9_21_diff = _f("ema9_21_diff", 999.0)
 
         p_down, p_no_break, p_up = float(probs[0]), float(probs[1]), float(probs[2])
         pred_class = int(np.argmax(probs))
@@ -110,12 +112,13 @@ class ExecutionEngine:
 
         # ── 3. Entry logic ────────────────────────────────────────────────────
         if self.port.can_enter and atr > 0:
-            sq_ok = (not self.req_sq) or (squeeze == 1)
+            sq_ok  = (not self.req_sq) or (squeeze == 1)
+            ema_ok = ema9_21_diff >= self.min_ema9_21
 
             # LONG: up-break anticipated
             if (p_up >= self.T_up and
                     not np.isnan(dist_rh) and dist_rh <= self.d_max and
-                    sq_ok):
+                    sq_ok and ema_ok):
                 self.port.open_trade(
                     direction = 1,
                     price     = price,
@@ -135,7 +138,7 @@ class ExecutionEngine:
             # SHORT: down-break anticipated
             elif (p_down >= self.T_down and
                     not np.isnan(dist_rl) and dist_rl <= self.d_max and
-                    sq_ok):
+                    sq_ok and ema_ok):
                 self.port.open_trade(
                     direction = -1,
                     price     = price,

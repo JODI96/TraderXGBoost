@@ -79,11 +79,12 @@ def run_backtest(
     df_feat: pd.DataFrame,
     probs: np.ndarray,
     cfg: dict,
-    T_up:      float | None = None,
-    T_down:    float | None = None,
-    d_max:     float | None = None,
-    time_stop: int   | None = None,
-    min_vol:   float | None = None,
+    T_up:           float | None = None,
+    T_down:         float | None = None,
+    d_max:          float | None = None,
+    time_stop:      int   | None = None,
+    min_vol:        float | None = None,
+    min_ema9_21:    float | None = None,
 ) -> tuple[pd.DataFrame, np.ndarray, dict]:
     """
     Event-driven simulation; processes one candle at a time.
@@ -134,7 +135,10 @@ def run_backtest(
                 else np.zeros(n)
     vol_regime = df_feat["vol_regime"].values if "vol_regime" in df_feat.columns \
                  else np.ones(n)
-    min_vol    = min_vol if min_vol is not None else tc.get("min_vol_regime", 0.0)
+    min_vol      = min_vol     if min_vol     is not None else tc.get("min_vol_regime",   0.0)
+    min_ema9_21  = min_ema9_21 if min_ema9_21 is not None else tc.get("min_ema9_21_diff", -999.0)
+    ema9_21_diff = df_feat["ema9_21_diff"].values if "ema9_21_diff" in df_feat.columns \
+                   else np.full(n, 999.0)
 
     p_down = probs[:, 0]
     p_up   = probs[:, 2]
@@ -221,13 +225,14 @@ def run_backtest(
 
         # ── Entry logic ───────────────────────────────────────────────────────
         if pos_dir == 0:
-            sq_ok  = (not req_sq) or sq_col[i] == 1
-            vol_ok = vol_regime[i] >= min_vol
+            sq_ok   = (not req_sq) or sq_col[i] == 1
+            vol_ok  = vol_regime[i] >= min_vol
+            ema_ok  = ema9_21_diff[i] >= min_ema9_21
 
             # LONG: imminent up-breakout
             if (p_up[i] >= T_u and
                     not np.isnan(dist_rh[i]) and dist_rh[i] <= dmax and
-                    sq_ok and vol_ok):
+                    sq_ok and vol_ok and ema_ok):
                 entry_price  = c
                 pos_size     = (capital * pos_pct) / (c + 1e-9)
                 if use_pct:
@@ -242,7 +247,7 @@ def run_backtest(
             # SHORT: imminent down-breakout
             elif (p_down[i] >= T_d and
                     not np.isnan(dist_rl[i]) and dist_rl[i] <= dmax and
-                    sq_ok and vol_ok):
+                    sq_ok and vol_ok and ema_ok):
                 entry_price  = c
                 pos_size     = (capital * pos_pct) / (c + 1e-9)
                 if use_pct:

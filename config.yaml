@@ -221,6 +221,12 @@ trading:
                            # intentionally > H_horizon=20: extra 10 bars help good setups complete
                            # empirical: ts=30 beats ts=20 at every threshold with H=20 labels
 
+  min_ema9_21_diff: -0.5  # min (EMA9-EMA21)/ATR to allow entry              [range: -2.0–1.0]
+                           # filters trades when short-term momentum is strongly bearish
+                           # -0.5 = EMA9 must be within 0.5 ATR below EMA21
+                           # 0.0  = EMA9 must be above EMA21 (bullish crossover only)
+                           # -999 = disabled
+
   cooldown:        5      # bars to wait after a trade closes                [range: 0–60]
                            # 5 bars = 5-minute cooldown between trades
                            # decrease → more trades, can re-enter immediately
