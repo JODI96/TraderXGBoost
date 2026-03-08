@@ -110,6 +110,10 @@ def _load_artifacts(art_dir: str):
     p = Path(art_dir)
     model = xgb.Booster()
     model.load_model(str(p / "xgb_model.json"))
+    try:
+        model.set_param({"device": "cuda"})
+    except Exception:
+        pass
     with open(p / "feature_columns.json") as f:
         feat_cols = json.load(f)
     return model, feat_cols
