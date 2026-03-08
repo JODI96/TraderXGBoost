@@ -9,23 +9,11 @@ Data/
 *.pickle
 
 # ── Trained model artifacts ───────────────────────────────────
-models/xgb_model.json
+# xgb_model.json is tracked (35 MB) so users can trade without retraining
 models/backtest_equity.csv
-models/backtest_equity.png
 models/backtest_trades.csv
-models/calibration.png
-models/confusion_matrix.png
-models/feature_importance.png
-models/threshold_curve.png
-models/signal_quality.csv
 models/live_portfolio.json
 models/replay_portfolio.json
-
-# Keep these model metadata files (small, useful to version)
-!models/feature_columns.json
-!models/thresholds.json
-!models/label_meta.json
-!models/backtest_report.json
 
 # ── Python ────────────────────────────────────────────────────
 __pycache__/
