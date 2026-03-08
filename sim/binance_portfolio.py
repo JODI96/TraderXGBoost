@@ -194,7 +194,8 @@ class BinancePortfolio:
 
         # ── Notional / quantity ───────────────────────────────────────────────
         # pos_pct here is the leverage multiplier (e.g. 30 = 30x)
-        notional = self.capital * pos_pct        # e.g. $10 000 * 30 = $300 000
+        # Capital is floored to whole dollars (11.01 → 11, 11.9 → 11)
+        notional = math.floor(self.capital) * pos_pct
         qty      = self._rq(notional / price)
 
         side       = "BUY"  if direction == 1 else "SELL"
