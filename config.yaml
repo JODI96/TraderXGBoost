@@ -232,7 +232,7 @@ trading:
                            # decrease → more trades, can re-enter immediately
 
   max_positions:   1      # maximum simultaneous open trades; keep at 1 for single-position mode
-  initial_capital: 10000.0  # starting capital in USD
+  initial_capital: 100.0  # starting capital in USD
   position_size_pct: 30.0    # fraction of capital risked per trade           [range: 0.01–10.0]
                              # 3.0 = 3x leverage; SL=-0.45% capital, TP=+1.35% capital per trade
 

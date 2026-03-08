@@ -46,6 +46,12 @@ env/
 # ── Sim logs ─────────────────────────────────────────────────
 sim/logs/
 
+# ── API secrets ───────────────────────────────────────────────
+.env
+
+# ── Live trade portfolio ───────────────────────────────────────
+models/live_trade_portfolio.json
+
 # ── Claude local settings ─────────────────────────────────────
 .claude/
 
