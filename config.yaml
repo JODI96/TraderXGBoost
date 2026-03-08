@@ -8,7 +8,7 @@ data:
   data_root: "Data"                   # root for multi-coin training
   symbol: "BTCUSDT"
   primary_tf: "1m"
-  years: [2023, 2024, 2025]          # years to load; more years = better model but slower training
+  years: [2022, 2023, 2024, 2025]          # years to load; more years = better model but slower training
   coins:                              # coins used for training; more coins = more data diversity
     - BTCUSDT
     - ETHUSDT

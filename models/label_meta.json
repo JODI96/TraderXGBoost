@@ -1,53 +1,53 @@
 {
-  "train_rows": 3786898,
-  "test_rows": 946725,
-  "train_start": "2023-01-01 05:15:00+00:00",
-  "train_end": "2025-05-26 19:53:00+00:00",
-  "test_start": "2025-05-26 19:53:00+00:00",
+  "train_rows": 5048218,
+  "test_rows": 1262055,
+  "train_start": "2022-01-01 05:15:00+00:00",
+  "train_end": "2025-03-14 20:03:00+00:00",
+  "test_start": "2025-03-14 20:03:00+00:00",
   "test_end": "2025-12-31 23:39:00+00:00",
-  "n_estimators": 2225,
+  "n_estimators": 2929,
   "n_features": 133,
-  "test_logloss": 0.5853865428516107,
+  "test_logloss": 0.5908456880877898,
   "fold_metrics": [
     {
       "fold": 0,
-      "n_rounds": 1108,
-      "val_logloss": 0.5288,
-      "f1_DOWN": 0.1612,
-      "f1_UP": 0.147,
-      "f1_macro": 0.4048
+      "n_rounds": 717,
+      "val_logloss": 0.7001,
+      "f1_DOWN": 0.1655,
+      "f1_UP": 0.155,
+      "f1_macro": 0.3885
     },
     {
       "fold": 1,
-      "n_rounds": 807,
-      "val_logloss": 0.6096,
-      "f1_DOWN": 0.1602,
-      "f1_UP": 0.1653,
-      "f1_macro": 0.4056
+      "n_rounds": 2136,
+      "val_logloss": 0.6198,
+      "f1_DOWN": 0.1755,
+      "f1_UP": 0.1587,
+      "f1_macro": 0.4031
     },
     {
       "fold": 2,
-      "n_rounds": 1514,
-      "val_logloss": 0.6105,
-      "f1_DOWN": 0.1698,
-      "f1_UP": 0.1608,
-      "f1_macro": 0.4045
+      "n_rounds": 2929,
+      "val_logloss": 0.5773,
+      "f1_DOWN": 0.1638,
+      "f1_UP": 0.1611,
+      "f1_macro": 0.4037
     },
     {
       "fold": 3,
-      "n_rounds": 1592,
-      "val_logloss": 0.6275,
-      "f1_DOWN": 0.1647,
-      "f1_UP": 0.1569,
-      "f1_macro": 0.398
+      "n_rounds": 1897,
+      "val_logloss": 0.6282,
+      "f1_DOWN": 0.1734,
+      "f1_UP": 0.1631,
+      "f1_macro": 0.4035
     },
     {
       "fold": 4,
-      "n_rounds": 2225,
-      "val_logloss": 0.5873,
-      "f1_DOWN": 0.168,
-      "f1_UP": 0.1562,
-      "f1_macro": 0.4053
+      "n_rounds": 2136,
+      "val_logloss": 0.6181,
+      "f1_DOWN": 0.1695,
+      "f1_UP": 0.1527,
+      "f1_macro": 0.3993
     }
   ],
   "label_config": {
