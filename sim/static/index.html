@@ -449,6 +449,14 @@ let slLine = null, tpLine = null, entryLine = null;
 let lastProb     = null;   // probability stored at trade open
 let inTrade      = false;
 
+// ── Chart history pruning (keep last 7 days = 10 080 bars at 1m) ──────────────
+const MAX_CHART_AGE_S = 7 * 24 * 3600;
+const allCandleData   = [];   // mirrors candles series
+const allVolData      = [];   // mirrors volSeries
+const allCvdData      = [];   // mirrors cvdSeries
+const allVwapData     = [];   // mirrors vwapLine
+let   barsSincePrune  = 0;
+
 // Client-side CVD (rolling sum of per-bar delta, window matches config cvd_window)
 // Computed in onCandle from buy_vol/volume so CVD chart has data from bar 0,
 // keeping it aligned with the candle and volume charts under logical-range sync.
@@ -475,6 +483,31 @@ function setAllMarkers() {
   candles.setMarkers(all);
 }
 
+// ── Chart pruning ─────────────────────────────────────────────────────────────
+function pruneChart(currentTimeS) {
+  const cutoff = currentTimeS - MAX_CHART_AGE_S;
+
+  // Find how many leading bars are older than cutoff
+  let cut = 0;
+  while (cut < allCandleData.length && allCandleData[cut].time < cutoff) cut++;
+  if (cut === 0) return;
+
+  allCandleData.splice(0, cut);
+  allVolData.splice(0, cut);
+  allCvdData.splice(0, cut);
+  candleHistory.splice(0, cut);
+  if (allVwapData.length >= cut) allVwapData.splice(0, cut);
+
+  tradeMarkers = tradeMarkers.filter(m => m.time >= cutoff);
+  volBubbles   = volBubbles.filter(m   => m.time >= cutoff);
+
+  candles.setData(allCandleData);
+  volSeries.setData(allVolData);
+  cvdSeries.setData(allCvdData);
+  vwapLine.setData(allVwapData);
+  setAllMarkers();
+}
+
 // ── Message handlers ──────────────────────────────────────────────────────────
 function onCandle(m) {
   const timeS = Math.floor(m.ts / 1000);
@@ -491,6 +524,7 @@ function onCandle(m) {
     candleData.wickColor   = '#5c85ff';
   }
   candles.update(candleData);
+  allCandleData.push(Object.assign({}, candleData));
 
   // Price header
   const el = document.getElementById('price-hdr');
@@ -498,17 +532,22 @@ function onCandle(m) {
   if (prevClose !== null) el.className = m.close >= prevClose ? 'up' : 'down';
   prevClose = m.close;
 
+  // Prune chart data older than 7 days every 1000 bars
+  barsSincePrune++;
+  if (barsSincePrune >= 1000) {
+    barsSincePrune = 0;
+    pruneChart(timeS);
+  }
+
   // Redraw volume profile
   if (vpEnabled) drawVP();
 
   // Volume histogram — green if buying dominated, red if selling
   if (m.volume != null) {
     const buyDom = m.buy_vol != null && m.buy_vol > (m.volume - m.buy_vol);
-    volSeries.update({
-      time:  timeS,
-      value: m.volume,
-      color: buyDom ? '#00c08788' : '#ff505088',
-    });
+    const volBar = { time: timeS, value: m.volume, color: buyDom ? '#00c08788' : '#ff505088' };
+    volSeries.update(volBar);
+    allVolData.push(volBar);
   }
 
   // CVD candles — computed client-side so the chart has data from bar 0
@@ -519,13 +558,15 @@ function onCandle(m) {
     if (cvdRing.length > CVD_WINDOW) cvdRing.shift();
     const cvdClose = cvdRing.reduce((a, b) => a + b, 0);
     const cvdOpen  = prevCvdClose !== null ? prevCvdClose : cvdClose;
-    cvdSeries.update({
+    const cvdBar = {
       time:  timeS,
       open:  cvdOpen,
       high:  Math.max(cvdOpen, cvdClose),
       low:   Math.min(cvdOpen, cvdClose),
       close: cvdClose,
-    });
+    };
+    cvdSeries.update(cvdBar);
+    allCvdData.push(cvdBar);
     document.getElementById('lbl-cvd').textContent =
       (cvdClose >= 0 ? '+' : '') + cvdClose.toFixed(0);
     prevCvdClose = cvdClose;
@@ -539,7 +580,11 @@ function onStats(m) {
   updateHdrDatetime(m.ts);
 
   // VWAP line
-  if (m.vwap != null) vwapLine.update({ time: timeS, value: m.vwap });
+  if (m.vwap != null) {
+    const vwapPt = { time: timeS, value: m.vwap };
+    vwapLine.update(vwapPt);
+    allVwapData.push(vwapPt);
+  }
 
 
   // Relative volume label
