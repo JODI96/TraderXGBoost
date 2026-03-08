@@ -144,8 +144,7 @@ class BinancePortfolio:
             logger.warning(f"[Binance] Balance sync failed: {exc}")
 
     def _rq(self, qty: float) -> float:
-        factor = 10 ** self._qty_precision
-        return math.floor(qty * factor) / factor
+        return round(qty, self._qty_precision)
 
     def _rp(self, price: float) -> str:
         return f"{price:.{self._price_precision}f}"
