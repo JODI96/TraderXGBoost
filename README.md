@@ -4,11 +4,11 @@ XGBoost-based breakout anticipation system for BTCUSDT (and multi-coin) perpetua
 Predicts **UP / DOWN / NO_BREAK** on 1-minute candles using **91 features** across ATR/volatility,
 volume, CVD/orderflow, VWAP, price levels/range, EMAs, multi-timeframe context (5m + 15m), and time-of-day.
 
-**Best result — T=0.67, 30x leverage, over 218 days:**
+**Best result — T=0.67, 30x leverage, over 292 days (2025-03-14 → 2025-12-31):**
 
 | Metric | Value |
 |---|---|
-| Total Return (218 days) | **+630.6%** |
+| Total Return (292 days) | **+630.6%** |
 | Win Rate | 51.3% |
 | Profit Factor | 1.97 |
 | Max Drawdown | −35.3% |
@@ -22,7 +22,7 @@ volume, CVD/orderflow, VWAP, price levels/range, EMAs, multi-timeframe context (
 
 ```
 ====================================================================================================
-  SWEEP  |  test=218d  |  MC risk: 20,000 paths/scenario  |  P(-X%) = prob capital drops >=X% at any point in 1 yr
+  SWEEP  |  test=292d (2025-03-14 → 2025-12-31)  |  MC risk: 20,000 paths/scenario  |  P(-X%) = prob capital drops >=X% at any point in 1 yr
 ====================================================================================================
       T    Ret%    Ann%   Trd  Days  Trd/d   Win%     PF   MaxDD%     P(-30%)   P(-50%)   P(-80%)
 
