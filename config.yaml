@@ -174,7 +174,7 @@ training:
                                            # decrease → more feature diversity, less overfit
                                            # increase → uses more features per tree
 
-    gamma:              0               # min loss reduction required to split [range: 0.0–5.0]
+    gamma:              1               # min loss reduction required to split [range: 0.0–5.0]
                                            # increase → fewer splits, more conservative model
                                            # decrease → more splits, learns finer patterns
 
@@ -189,7 +189,7 @@ training:
     seed:               42                # random seed for reproducibility
     verbosity:          0                 # 0=silent, 1=warnings, 2=info      [range: 0–2]
 
-  early_stopping_rounds: 50              # stop if no val improvement for N rounds [range: 20–200]
+  early_stopping_rounds: 100              # stop if no val improvement for N rounds [range: 20–200]
                                           # increase → more patient, finds better solution
                                           # decrease → faster training but may stop too early
 
@@ -197,11 +197,11 @@ training:
 
 # ── Trading Signal ────────────────────────────────────────────────────────────
 trading:
-  T_up:            0.68   # min model probability for UP_BREAK -> LONG entry  [range: 0.3-0.9]
+  T_up:            0.67   # min model probability for UP_BREAK -> LONG entry  [range: 0.3-0.9]
                            # increase → fewer but higher-confidence entries (better precision)
                            # decrease → more entries but more false signals
 
-  T_down:          0.68   # min model probability for DOWN_BREAK → SHORT entry [range: 0.3–0.9]
+  T_down:          0.67   # min model probability for DOWN_BREAK → SHORT entry [range: 0.3–0.9]
                            # same logic as T_up
 
   d_max_atr:       1.5    # max distance from price to range boundary (ATR)  [range: 0.5–5.0]
