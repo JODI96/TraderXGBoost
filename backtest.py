@@ -407,7 +407,7 @@ def main() -> None:
         tp_pct     = cfg["labels"].get("tp_pct", cfg["trading"].get("tp_pct", 0.0045))
         sl_pct     = cfg["labels"].get("sl_pct", cfg["trading"].get("sl_pct", 0.0015))
         rng        = np.random.default_rng(42)
-        test_days  = 218  # approximate length of test split in calendar days
+        test_days  = 292  # approximate length of test split in calendar days
 
         W = 100
         col_hdr = (
