@@ -59,7 +59,10 @@ BTCUSDT + ETHUSDT + SOLUSDT · ~2.1M bars total · ~3–5 min on modern CPU.
 
 ---
 
-## Setup
+## Quick Start
+
+> **The trained model is included in the repo.**
+> You can paper trade or go live immediately after cloning — no training required.
 
 ```bash
 # 1. Clone
@@ -77,13 +80,16 @@ source trader2/bin/activate
 # 3. Install dependencies
 pip install -r requirements.txt
 
-# 4. (Live trading only) Set Binance Futures API keys
+# 4. Paper trade immediately — open http://localhost:8080
+python sim/sim_live_ui.py
+
+# 5. (Real trading only) Set Binance Futures API keys
 cp .env.example .env
-# Edit .env and fill in BINANCE_API_KEY and BINANCE_API_SECRET
+# Edit .env — fill in BINANCE_API_KEY and BINANCE_API_SECRET
+python trade_live.py
 ```
 
-> **Note — Windows users:** The system uses `asyncio.WindowsSelectorEventLoopPolicy` automatically.
-> No extra configuration needed.
+> **Note — Windows:** `asyncio.WindowsSelectorEventLoopPolicy` is set automatically. No extra config needed.
 
 ---
 
