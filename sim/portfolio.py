@@ -101,12 +101,18 @@ class Portfolio:
         tp_atr: float,
         pos_pct: float,
         timestamp: str,
+        sl_pct: float | None = None,
+        tp_pct: float | None = None,
     ) -> None:
         if not self.can_enter:
             raise RuntimeError("Cannot open trade: position open or in cooldown.")
-        size     = (self.capital * pos_pct) / (price + 1e-9)
-        sl_price = price - direction * sl_atr * atr
-        tp_price = price + direction * tp_atr * atr
+        size = (self.capital * pos_pct) / (price + 1e-9)
+        if sl_pct is not None and tp_pct is not None:
+            sl_price = price * (1.0 - direction * sl_pct)
+            tp_price = price * (1.0 + direction * tp_pct)
+        else:
+            sl_price = price - direction * sl_atr * atr
+            tp_price = price + direction * tp_atr * atr
         self.position = Position(
             direction    = direction,
             entry_price  = price,
@@ -159,20 +165,22 @@ class Portfolio:
         self.equity_curve.append(self.mark_to_market(price))
 
     # ── Exit check ────────────────────────────────────────────────────────────
-    def check_exits(self, price: float) -> Optional[str]:
-        """Return exit reason if position should close, else None."""
+    def check_exits(self, high: float, low: float) -> tuple[Optional[str], float]:
+        """
+        Check intrabar SL/TP using the candle's high and low.
+        Returns (reason, exit_price) or (None, 0.0).
+        SL takes priority when both are hit in the same candle.
+        """
         if self.position is None:
-            return None
-        pos       = self.position
-        time_held = self.bar_count - pos.entry_bar
-
+            return None, 0.0
+        pos = self.position
         if pos.direction == 1:
-            if price <= pos.sl_price:  return "SL"
-            if price >= pos.tp_price:  return "TP"
+            if low  <= pos.sl_price: return "SL", pos.sl_price
+            if high >= pos.tp_price: return "TP", pos.tp_price
         else:
-            if price >= pos.sl_price:  return "SL"
-            if price <= pos.tp_price:  return "TP"
-        return None
+            if high >= pos.sl_price: return "SL", pos.sl_price
+            if low  <= pos.tp_price: return "TP", pos.tp_price
+        return None, 0.0
 
     # ── Summary ───────────────────────────────────────────────────────────────
     def summary(self) -> dict:

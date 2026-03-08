@@ -125,6 +125,8 @@ def run_backtest(
 
     n      = len(df_feat)
     close  = df_feat["close"].values
+    high   = df_feat["high"].values
+    low    = df_feat["low"].values
     # Use atr_short from features (same source as execution.py uses for SL/TP)
     atr    = df_feat["atr_short"].values if "atr_short" in df_feat.columns \
              else np.full(n, np.nan)
@@ -173,14 +175,22 @@ def run_backtest(
         # ── Check exit conditions ─────────────────────────────────────────────
         if pos_dir != 0:
             time_held = i - entry_idx
-            hit_sl    = (pos_dir == 1  and c <= sl_price) or \
-                        (pos_dir == -1 and c >= sl_price)
-            hit_tp    = (pos_dir == 1  and c >= tp_price) or \
-                        (pos_dir == -1 and c <= tp_price)
+            h, l      = high[i], low[i]
+            # Use intrabar high/low so SL/TP fire as soon as price touches level
+            hit_sl    = (pos_dir == 1  and l <= sl_price) or \
+                        (pos_dir == -1 and h >= sl_price)
+            hit_tp    = (pos_dir == 1  and h >= tp_price) or \
+                        (pos_dir == -1 and l <= tp_price)
             hit_time  = time_held >= time_stop
 
             if hit_sl or hit_tp or hit_time:
-                exit_p  = c
+                # Exit at exact SL/TP level; time-stop exits at close
+                if hit_sl:
+                    exit_p = sl_price
+                elif hit_tp:
+                    exit_p = tp_price
+                else:
+                    exit_p = c
                 raw_pnl = ((exit_p - entry_price) * pos_dir * pos_size)
                 cost_pnl = entry_price * pos_size * cost_rt
                 net_pnl  = raw_pnl - cost_pnl

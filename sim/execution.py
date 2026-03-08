@@ -44,9 +44,12 @@ class ExecutionEngine:
         self.d_max     = tc["d_max_atr"]
         self.sl_atr    = tc["sl_atr"]
         self.tp_atr    = tc["tp_atr"]
+        self.sl_pct    = tc.get("sl_pct")
+        self.tp_pct    = tc.get("tp_pct")
         self.time_stop = tc["time_stop"]
         self.pos_pct   = tc["position_size_pct"]
         self.req_sq    = tc.get("require_squeeze", False)
+        self.L_range   = lc.get("L_range", 20)
 
         self.cost_rt = (lc["maker_fee"] + lc["taker_fee"] +
                         lc["slippage"]  + lc["spread"]) * 2
@@ -78,8 +81,10 @@ class ExecutionEngine:
                    if hasattr(features, "get") else default
 
         atr      = _f("atr_short", _f("atr", 0.0))
-        dist_rh  = _f("dist_rh_20",  np.nan)   # (range_high_20 - close) / atr
-        dist_rl  = _f("dist_rl_20",  np.nan)
+        high     = _f("high",  price)
+        low      = _f("low",   price)
+        dist_rh  = _f(f"dist_rh_{self.L_range}", np.nan)
+        dist_rl  = _f(f"dist_rl_{self.L_range}", np.nan)
         squeeze  = int(_f("squeeze_flag", 0))
 
         p_down, p_no_break, p_up = float(probs[0]), float(probs[1]), float(probs[2])
@@ -87,20 +92,20 @@ class ExecutionEngine:
 
         trade_event = None
 
-        # ── 1. Check time-stop exit ───────────────────────────────────────────
+        # ── 1. Check SL / TP exit (intrabar high/low) ────────────────────────
+        if self.port.position is not None:
+            reason, exit_p = self.port.check_exits(high, low)
+            if reason:
+                trade = self.port.close_trade(exit_p, timestamp, reason)
+                trade_event = {"event": "CLOSE", "reason": reason,
+                               **self._trade_dict(trade)}
+
+        # ── 2. Check time-stop exit (close price) ────────────────────────────
         if self.port.position is not None:
             time_held = self.port.bar_count - self.port.position.entry_bar
             if time_held >= self.time_stop:
                 trade = self.port.close_trade(price, timestamp, "TIME")
                 trade_event = {"event": "CLOSE", "reason": "TIME",
-                               **self._trade_dict(trade)}
-
-        # ── 2. Check SL / TP exit ─────────────────────────────────────────────
-        if self.port.position is not None:
-            reason = self.port.check_exits(price)
-            if reason:
-                trade = self.port.close_trade(price, timestamp, reason)
-                trade_event = {"event": "CLOSE", "reason": reason,
                                **self._trade_dict(trade)}
 
         # ── 3. Entry logic ────────────────────────────────────────────────────
@@ -119,6 +124,8 @@ class ExecutionEngine:
                     tp_atr    = self.tp_atr,
                     pos_pct   = self.pos_pct,
                     timestamp = timestamp,
+                    sl_pct    = self.sl_pct,
+                    tp_pct    = self.tp_pct,
                 )
                 trade_event = {"event": "OPEN", "direction": "LONG",
                                "price": price, "p_up": p_up,
@@ -137,6 +144,8 @@ class ExecutionEngine:
                     tp_atr    = self.tp_atr,
                     pos_pct   = self.pos_pct,
                     timestamp = timestamp,
+                    sl_pct    = self.sl_pct,
+                    tp_pct    = self.tp_pct,
                 )
                 trade_event = {"event": "OPEN", "direction": "SHORT",
                                "price": price, "p_down": p_down,
