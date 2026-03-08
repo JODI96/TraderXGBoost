@@ -1,75 +1,113 @@
 # BTC 1-Minute Scalping System
 
-XGBoost-based breakout anticipation system for BTCUSDT perpetual futures.
-Predicts UP / DOWN / NO_BREAK on 1-minute candles using 107 features across
-volatility, volume, CVD/orderflow, VWAP, volume profile (POC/VAH/VAL), price levels, EMAs, and multi-timeframe context.
+XGBoost-based breakout anticipation system for BTCUSDT (and multi-coin) perpetual futures.
+Predicts **UP / DOWN / NO_BREAK** on 1-minute candles using **91 features** across ATR/volatility,
+volume, CVD/orderflow, VWAP, price levels/range, EMAs, multi-timeframe context (5m + 15m), and time-of-day.
+
+**Backtest results (3-year test split, $10k capital, 30x leverage):**
+
+| Metric | Value |
+|---|---|
+| Total Return | +36.6% |
+| Sharpe Ratio | 1.54 |
+| Win Rate | 42% |
+| Profit Factor | 1.28 |
+| Max Drawdown | −20.6% |
+| Trades | 88 |
 
 ---
 
-## What It Does
+## Architecture
 
-1. **Trains** a walk-forward XGBoost classifier on 1m Binance candle data (2023-2025)
-2. **Evaluates** signal quality and precision on a held-out test split
-3. **Backtests** event-driven paper trades with ATR-based stop/take-profit
-4. **Simulates** live trading via Binance WebSocket — terminal mode or browser dashboard
+```
+Raw 1m OHLCV  ──►  features.py  ──►  XGBoost (3-class softprob)
+                  (91 features)       p_up / p_down / p_no_break
+                                               │
+                            ┌──────────────────▼──────────────────┐
+                            │  p_up  > T_up  (0.67)  →  LONG      │
+                            │  p_dn  > T_dn  (0.67)  →  SHORT     │
+                            │  else           →  FLAT (wait)       │
+                            └──────────────────┬──────────────────┘
+                                               │
+                         SL = −0.15% · price   │   TP = +0.45% · price  (1:3 RR)
+                         Time stop after 20 bars if neither hit
+```
+
+**Feature groups (91 total):**
+
+| Group | Count | Description |
+|---|---|---|
+| ATR / Volatility | 13 | Fast/slow ATR, Bollinger Bands, Keltner squeeze, vol contraction |
+| Volume / Energy | 6 | Relative volume, volume spike, vol·range composite |
+| CVD / Orderflow | 20 | Cumulative Volume Delta (real taker data), A/D, divergence, delta bubble |
+| VWAP | 4 | Rolling VWAP distance, VWAP-AD bias |
+| Levels / Range | 31 | POC/VAH/VAL proximity (rolling VP), range width, boundary touch counts |
+| EMA / Trend | 17 | EMA 9/21/50/200, fast EMAs (3/5), trend30 slope/range, acceleration |
+| MTF (5m + 15m) | 22 | Resampled ATR, trend, volume, CVD — causal resampling from 1m buffer |
+| Time | 4 | Hour-of-day and day-of-week (sin/cos cyclic encoding) |
+
+**Training:**  5-fold walk-forward cross-validation · 4 years of data (2022–2025) ·
+BTCUSDT + ETHUSDT + SOLUSDT · ~2.1M bars total · ~3–5 min on modern CPU.
 
 ---
 
 ## Requirements
 
-- Python 3.10+
-- Windows/Linux/macOS
+- Python **3.10+**
+- Windows / Linux / macOS
+- Internet access for live trading (Binance WebSocket)
+
+---
 
 ## Setup
 
 ```bash
-# 1. Clone the repo
-git clone <repo-url>
-cd Trader2
+# 1. Clone
+git clone https://github.com/JODI96/TraderXGBoost.git
+cd TraderXGBoost
 
-# 2. Create and activate virtual environment
+# 2. Create virtual environment
 python -m venv trader2
+
 # Windows
 trader2\Scripts\activate
-# Linux/macOS
+# Linux / macOS
 source trader2/bin/activate
 
 # 3. Install dependencies
 pip install -r requirements.txt
+
+# 4. (Live trading only) Set Binance Futures API keys
+cp .env.example .env
+# Edit .env and fill in BINANCE_API_KEY and BINANCE_API_SECRET
 ```
 
-### Dependencies (from requirements.txt)
-
-| Package | Purpose |
-|---|---|
-| xgboost | Model training and inference |
-| pandas | Data loading and feature engineering |
-| numpy | Numerical operations |
-| scikit-learn | Walk-forward CV, metrics |
-| matplotlib / seaborn | Evaluation plots |
-| optuna | Hyperparameter search (optional) |
-| websockets / aiohttp | Live Binance WebSocket feed |
-| pyyaml | Config file parsing |
-| joblib | Artifact serialization |
-| tqdm | Progress bars |
-| pyarrow | Parquet support |
+> **Note — Windows users:** The system uses `asyncio.WindowsSelectorEventLoopPolicy` automatically.
+> No extra configuration needed.
 
 ---
 
 ## Data
 
-Data is NOT included in the repo (too large). Place Binance 1m/5m/15m OHLCV CSVs here:
+Data is **not included** in the repo (too large). Place Binance OHLCV CSVs here:
 
 ```
-Data/BTCUSDT/full_year/
-    2023_1m.csv
-    2023_5m.csv
-    2023_15m.csv
-    2024_1m.csv   (etc.)
-    2025_1m.csv   (etc.)
+Data/
+└── BTCUSDT/
+│   └── full_year/
+│       ├── 2022_1m.csv
+│       ├── 2022_5m.csv
+│       ├── 2022_15m.csv
+│       ├── 2023_1m.csv   ...
+│       ├── 2024_1m.csv   ...
+│       └── 2025_1m.csv   ...
+└── ETHUSDT/
+│   └── full_year/  (same structure)
+└── SOLUSDT/
+    └── full_year/  (same structure)
 ```
 
-**CSV format** — standard Binance 12-column export:
+**CSV format** — standard Binance 12-column kline export:
 
 ```
 open_time, open, high, low, close, volume, close_time,
@@ -77,163 +115,261 @@ quote_vol, num_trades, taker_buy_vol, taker_buy_quote_vol, ignore
 ```
 
 Download from [Binance Vision](https://data.binance.vision/) or via the Binance API.
-
----
-
-## Configuration
-
-All hyperparameters live in `config.yaml`. Key sections:
-
-| Section | Controls |
-|---|---|
-| `data` | Symbol, years, timeframes, multi-coin list |
-| `labels` | Lookback, horizon, ATR breakout threshold, RR ratio, fees |
-| `features` | ATR spans, BB/Keltner periods, EMA periods, CVD windows |
-| `training` | Test size, walk-forward folds, XGBoost params, class weights |
-| `trading` | Entry probability thresholds, SL/TP in ATR, time stop, cooldown |
-| `simulation` | Replay file, speed multiplier, WebSocket URL, log paths |
-
----
-
-## Usage
-
-All commands assume you are in the project root with the venv active.
-
-### 1. Train
-
-```bash
-python train.py
-```
-
-- Loads 3 years of 1m data (~1.5M bars)
-- Runs 5-fold walk-forward cross-validation
-- Trains final model on full training split
-- Saves artifacts to `models/`:
-  - `xgb_model.json` — trained model
-  - `feature_columns.json` — feature list (order matters)
-  - `thresholds.json` — per-class probability thresholds
-  - `label_meta.json` — label distribution stats
-
-Runtime: ~3-5 minutes on a modern CPU.
-
-### 2. Evaluate
-
-```bash
-python eval.py
-```
-
-Outputs classification report, signal quality metrics, and saves plots to `models/`:
-- `confusion_matrix.png`
-- `feature_importance.png`
-- `threshold_curve.png`
-- `calibration.png`
-
-### 3. Backtest
-
-```bash
-python backtest.py
-```
-
-Event-driven backtest on the held-out test split using the same FeatureEngine as live.
-Results saved to `models/`:
-- `backtest_report.json` — win rate, Sharpe, max drawdown, PnL
-- `backtest_equity.csv` / `backtest_equity.png`
-- `backtest_trades.csv`
-
-### 4. Replay Simulation — Terminal
-
-```bash
-python sim/sim_replay.py
-```
-
-Replays a CSV file through the full pipeline at configurable speed.
-Logs trades to `sim/logs/replay_log.jsonl`.
-
-### 5. Replay Simulation — Browser Dashboard
-
-```bash
-python sim/sim_replay_ui.py
-python sim/sim_replay_ui.py --data Data/BTCUSDT/monthly/2026-02_1m.csv
-python sim/sim_replay_ui.py --speed 0                          # max speed
-python sim/sim_replay_ui.py --start 2025-06-01 --end 2025-07-01
-```
-
-Same as above, with a live browser UI at **http://localhost:8080**:
-- Candlestick chart with VWAP, Volume, CVD sub-panels
-- Fixed Range Volume Profile overlay (POC / VAH / VAL)
-- Volume spike bubbles, trade entry/exit arrows, in-trade candle highlighting
-- Running trade log with PnL and probability
-- Replay progress bar; waits for browser connection before starting
-
-### 6. Live Paper Trade — Terminal
-
-```bash
-python sim/sim_live_binance.py
-```
-
-Connects to Binance WebSocket, pre-warms the feature engine from recent REST candles,
-then trades live candles in paper mode. Logs to `sim/logs/live_log.jsonl`.
-
-### 7. Live Paper Trade — Browser Dashboard
-
-```bash
-python sim/sim_live_ui.py
-python sim/sim_live_ui.py --symbol ETHUSDT
-```
-
-Same as above, plus the full browser UI at **http://localhost:8080**:
-- Live candlestick chart with VWAP, Volume, CVD, Volume Profile overlay
-- Trade entry/exit arrows, in-trade blue candles, running trade log
-- Internal WebSocket on port 8765
+Column 10 (`taker_buy_vol`) is used as the real delta source for CVD features.
 
 ---
 
 ## Project Structure
 
 ```
-config.yaml             All hyperparameters
-requirements.txt        Python dependencies
-data.py                 load_csv(), load_all(), candle_from_dict()
-features.py             compute_features() + FeatureEngine (live incremental)
-labels.py               compute_labels() -> 3-class labels + fakeout columns
-train.py                Walk-forward CV + final model + artifact export
-eval.py                 Classification report, signal quality, plots
-backtest.py             Event-driven vectorised backtest
-models/                 Saved artifacts (generated by train.py)
-sim/
-    __init__.py
-    portfolio.py        Portfolio, Position, Trade dataclasses
-    execution.py        ExecutionEngine (signal -> order -> trade log)
-    replay_feed.py      ReplayFeed (CSV row iterator)
-    binance_ws_feed.py  BinanceWSFeed (async WS) + SyncBinanceWSFeed
-    sim_replay.py       Historical paper-trade simulation (terminal)
-    sim_replay_ui.py    Historical paper-trade simulation + browser dashboard
-    sim_live_binance.py Live paper-trade (terminal)
-    sim_live_ui.py      Live paper-trade + browser dashboard
-    static/
-        index.html      Browser UI (Lightweight Charts, dark theme, VP overlay)
-    logs/               Trade logs (generated at runtime, not tracked)
-Data/                   OHLCV CSVs (not tracked in git)
+C:/Trader2/
+├── config.yaml               All hyperparameters — single source of truth
+├── requirements.txt
+├── .env.example              API key template (copy to .env)
+│
+├── data.py                   load_csv(), load_all(), candle_from_dict()
+├── features.py               compute_features() + FeatureEngine (live incremental)
+├── labels.py                 compute_labels() → 3-class labels + fakeout columns
+├── train.py                  Walk-forward CV + final model + artifact export
+├── eval.py                   Classification report, signal quality, plots
+├── backtest.py               Event-driven vectorised backtest
+├── trade_live.py             *** REAL MONEY *** live trading + browser dashboard
+│
+├── models/                   Generated by train.py — not in git (large)
+│   ├── xgb_model.json        Trained XGBoost model
+│   ├── feature_columns.json  Feature list (order matters for inference)
+│   ├── thresholds.json       Per-class probability thresholds
+│   ├── label_meta.json       Label distribution stats
+│   ├── backtest_report.json  Backtest summary metrics
+│   ├── backtest_trades.csv   Per-trade log
+│   └── backtest_equity.png   Equity curve chart
+│
+├── sim/
+│   ├── portfolio.py          Portfolio, Position, Trade dataclasses (paper)
+│   ├── binance_portfolio.py  BinancePortfolio — real Futures order execution
+│   ├── execution.py          ExecutionEngine: signal → order → trade log
+│   ├── replay_feed.py        ReplayFeed: CSV row iterator
+│   ├── binance_ws_feed.py    BinanceWSFeed (async) + SyncBinanceWSFeed
+│   ├── sim_replay.py         Historical paper-trade simulation (terminal)
+│   ├── sim_replay_ui.py      Historical paper-trade simulation + browser UI
+│   ├── sim_live_binance.py   Live paper-trade (terminal only)
+│   ├── sim_live_ui.py        Live paper-trade + browser dashboard
+│   ├── static/
+│   │   ├── index.html        Browser UI (dark theme, Lightweight Charts)
+│   │   └── lightweight-charts.js  Bundled chart library (no CDN dependency)
+│   └── logs/                 Trade logs written at runtime
+│
+└── Data/                     OHLCV CSVs — not tracked in git
 ```
+
+---
+
+## Commands
+
+All commands assume you are in the **project root** with the venv active.
+
+### Train
+
+```bash
+# Full 3-year training on all configured coins (~3–5 min)
+./trader2/Scripts/python.exe train.py
+
+# Use a different config
+./trader2/Scripts/python.exe train.py --config config.yaml
+```
+
+Saves artifacts to `models/`: `xgb_model.json`, `feature_columns.json`, `thresholds.json`, `label_meta.json`.
+
+---
+
+### Evaluate
+
+```bash
+# Classification report + signal quality + plots
+./trader2/Scripts/python.exe eval.py
+```
+
+Outputs to `models/`: `confusion_matrix.png`, `feature_importance.png`, `threshold_curve.png`, `calibration.png`, `signal_quality.csv`.
+
+---
+
+### Backtest
+
+```bash
+# Event-driven backtest on held-out test split
+./trader2/Scripts/python.exe backtest.py
+```
+
+Outputs to `models/`: `backtest_report.json`, `backtest_trades.csv`, `backtest_equity.csv`, `backtest_equity.png`.
+
+---
+
+### Replay Simulation — Terminal
+
+```bash
+# Replay default CSV from config
+./trader2/Scripts/python.exe sim/sim_replay.py
+
+# Replay a specific file
+./trader2/Scripts/python.exe sim/sim_replay.py --data Data/BTCUSDT/full_year/2025_1m.csv
+
+# Max speed (no delay between bars)
+./trader2/Scripts/python.exe sim/sim_replay.py --speed 0
+
+# Custom date range
+./trader2/Scripts/python.exe sim/sim_replay.py --start 2025-01-01 --end 2025-03-01
+```
+
+Logs trades to `sim/logs/replay_log.jsonl`.
+
+---
+
+### Replay Simulation — Browser Dashboard
+
+```bash
+# Default replay with browser UI
+./trader2/Scripts/python.exe sim/sim_replay_ui.py
+
+# Specific file
+./trader2/Scripts/python.exe sim/sim_replay_ui.py --data Data/BTCUSDT/full_year/2025_1m.csv
+
+# Max speed
+./trader2/Scripts/python.exe sim/sim_replay_ui.py --speed 0
+
+# Custom date range
+./trader2/Scripts/python.exe sim/sim_replay_ui.py --start 2025-06-01 --end 2025-07-01
+
+# Custom ports
+./trader2/Scripts/python.exe sim/sim_replay_ui.py --port 8080 --ws-port 8765
+```
+
+Open **http://localhost:8080** in your browser. The replay waits for a browser connection before starting.
+
+**Dashboard features:**
+- Candlestick chart with VWAP overlay
+- Volume histogram + CVD sub-chart
+- Fixed Range Volume Profile (POC / VAH / VAL) toggle
+- Volume spike bubbles on chart
+- Trade entry/exit arrows with direction and probability
+- In-trade candles highlighted blue
+- Live running trade log with PnL and win rate
+- Replay progress bar and final session summary
+
+---
+
+### Live Paper Trading — Terminal
+
+```bash
+# Default symbol (BTCUSDT from config)
+./trader2/Scripts/python.exe sim/sim_live_binance.py
+
+# Different symbol
+./trader2/Scripts/python.exe sim/sim_live_binance.py --symbol ETHUSDT
+```
+
+Connects to Binance WebSocket, pre-warms the FeatureEngine from recent REST candles, then trades live 1m candles in paper mode. Logs to `sim/logs/live_log.jsonl`.
+
+---
+
+### Live Paper Trading — Browser Dashboard
+
+```bash
+# Default (BTCUSDT, port 8080)
+./trader2/Scripts/python.exe sim/sim_live_ui.py
+
+# Different symbol
+./trader2/Scripts/python.exe sim/sim_live_ui.py --symbol ETHUSDT
+
+# Custom ports
+./trader2/Scripts/python.exe sim/sim_live_ui.py --port 8080 --ws-port 8765
+```
+
+Open **http://localhost:8080**. Pre-warms from the last 80 REST candles so the chart is populated immediately — no waiting for live data.
+
+---
+
+### Live Real Trading — Browser Dashboard ⚠️
+
+> **WARNING: This places REAL orders with REAL money on Binance Futures.**
+> Start with a small `position_size_pct` in `config.yaml` to verify behaviour.
+> Requires Binance Futures API keys in `.env`.
+
+```bash
+# Default (BTCUSDT, port 8080)
+./trader2/Scripts/python.exe trade_live.py
+
+# Different symbol
+./trader2/Scripts/python.exe trade_live.py --symbol ETHUSDT
+
+# Custom ports
+./trader2/Scripts/python.exe trade_live.py --port 8080 --ws-port 8765
+```
+
+Open **http://localhost:8080**. Same dashboard as paper trading, with a **LIVE** badge.
+
+**What it does per bar:**
+1. Receives closed 1m candle from Binance WebSocket
+2. Updates FeatureEngine (incremental, causal — no lookahead)
+3. Runs XGBoost inference → `p_up`, `p_down`, `p_no_break`
+4. If `p_up > T_up` → MARKET BUY + server-side STOP_MARKET + TAKE_PROFIT_MARKET
+5. If `p_dn > T_dn` → MARKET SELL + server-side STOP_MARKET + TAKE_PROFIT_MARKET
+6. Polls Binance position endpoint each bar to detect SL/TP fills
+7. Force-closes on time stop or Ctrl+C
+
+**Setup:**
+```bash
+cp .env.example .env
+# Fill in your Binance Futures API keys
+```
+
+**Key config values to set before going live** (`config.yaml`):
+```yaml
+trading:
+  T_up:              0.67   # entry threshold — raise to reduce trade frequency
+  T_down:            0.67
+  sl_pct:            0.0015 # 0.15% stop-loss
+  tp_pct:            0.0045 # 0.45% take-profit  (1:3 RR)
+  time_stop:         20     # force-close after N bars
+  position_size_pct: 1.0    # START LOW — this is your leverage multiplier
+  initial_capital:   10.0   # your actual account balance in USDT
+```
+
+---
+
+## Configuration Reference
+
+All hyperparameters live in `config.yaml`. Everything is documented inline with ranges.
+
+| Section | Key parameters |
+|---|---|
+| `data` | `symbol`, `years`, `coins` (multi-coin training list) |
+| `labels` | `L_range` (range lookback), `H_horizon` (trade window), `sl_pct`, `tp_pct` |
+| `features` | `atr_short/long`, `ema_periods`, `cvd_window`, `vwap_window` |
+| `training` | `n_wf_splits`, `break_weight`, `xgb_params` (n_estimators, learning_rate, max_depth) |
+| `trading` | `T_up`, `T_down`, `sl_pct`, `tp_pct`, `time_stop`, `cooldown`, `position_size_pct` |
+| `simulation` | WebSocket URLs, log file paths, replay speed |
+
+> `labels.sl_pct` and `trading.sl_pct` must match. Same for `tp_pct`.
 
 ---
 
 ## Label Design
 
-Labels are computed over a 30-candle lookahead horizon:
+Labels are computed using a **barrier method** over a 20-candle lookahead:
 
-- **UP_BREAK_SOON (2)** — price breaks above the 30-candle range high by `k * ATR` and hits TP before SL within 30 bars
-- **DOWN_BREAK_SOON (0)** — price breaks below the 30-candle range low by `k * ATR` and hits SL before TP within 30 bars
-- **NO_BREAK (1)** — neither condition met within the horizon
+- **UP (2)** — price hits `entry + tp_pct` before `entry − sl_pct` within 20 bars
+- **DOWN (0)** — price hits `entry − sl_pct` before `entry + tp_pct` within 20 bars
+- **NO_BREAK (1)** — neither barrier reached within the horizon
 
-Distribution (3-year, sl_atr=30, rr=3.0): DOWN ~0.7%, NO_BREAK ~98.5%, UP ~0.8%.
-Break classes are upweighted (12x) during training to compensate for class imbalance.
+Label distribution (4 years, 3 coins): UP ≈ 13.9%, DOWN ≈ 14.1%, NO_BREAK ≈ 72%.
+Break classes are upweighted (`break_weight = 10.0`) during training.
 
 ---
 
 ## Notes
 
-- The model uses **limit orders only** (maker fees, no slippage assumed)
-- SL and TP distances are in ATR multiples — set in `config.yaml` under both `labels` and `trading` (must match)
-- FeatureEngine requires ~70 candles of warmup before producing valid features
-- XGBoost handles residual NaN values natively; no imputation needed
+- **FeatureEngine warmup:** ~70 bars required before valid features. The REST pre-warm fills this instantly so live trading starts on bar 1.
+- **XGBoost + NaN:** The model handles residual NaN natively — no imputation needed.
+- **MTF features:** 5m and 15m features are derived by causal resampling of the 1m buffer inside `compute_features()` — no separate feeds needed, train/live stay in sync.
+- **Single source of truth:** `compute_features()` is used identically in training, backtesting, and live inference.
+- **Fakeout filtering:** A secondary `ema9_21_diff` regime filter skips entries in strongly trending bars to avoid chasing.
