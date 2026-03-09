@@ -243,19 +243,25 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
     feed   = BinanceWSFeed(symbol=symbol, ws_url=ws_url)
 
     # ── Banner ────────────────────────────────────────────────────────────────
-    sep = _clr("═" * 62, C.BLUE, C.BOLD)
-    print(f"\n {sep}")
-    print(f"  {_clr('LIVE TRADING', C.BOLD, C.BG_BLUE, C.WHITE)}  "
-          f"{_clr('REAL MONEY · BINANCE FUTURES', C.YELLOW, C.BOLD)}")
-    print(f"  {_clr('Symbol  ', C.GRAY)} {_clr(symbol, C.WHITE, C.BOLD)}"
-          f"   {_clr('Leverage', C.GRAY)} {_clr(str(portfolio.leverage)+'x', C.YELLOW, C.BOLD)}"
-          f"   {_clr('Balance', C.GRAY)} {_clr(f'${portfolio.capital:,.2f}', C.CYAN, C.BOLD)}")
-    print(f"  {_clr('T_up/dn ', C.GRAY)} {tc['T_up']} / {tc['T_down']}"
-          f"   {_clr('SL/TP', C.GRAY)} {tc.get('sl_pct',0)*100:.2f}% / {tc.get('tp_pct',0)*100:.2f}%"
-          f"   {_clr('Dashboard', C.GRAY)} {_clr('http://localhost:8080', C.BLUE)}")
-    print(f" {sep}")
-    print(f"  {_clr('Ctrl+C', C.YELLOW)} to stop  ·  open position will be closed")
-    print()
+    _BW  = 66
+    _BR  = lambda s: _clr(s, C.CYAN, C.BOLD)
+    _btop = _BR("╔" + "═" * _BW + "╗")
+    _bmid = _BR("╠" + "═" * _BW + "╣")
+    _bbot = _BR("╚" + "═" * _BW + "╝")
+    _bl   = _BR("║")
+    print(f"\n {_btop}")
+    print(f" {_bl}  {_clr('LIVE TRADING', C.WHITE, C.BOLD)}  "
+          f"{_clr('·', C.DIM)}  {_clr(symbol, C.CYAN, C.BOLD)}  "
+          f"{_clr('·', C.DIM)}  {_clr('BINANCE FUTURES', C.YELLOW, C.BOLD)}")
+    print(f" {_bmid}")
+    print(f" {_bl}  {_clr('Leverage', C.GRAY)} {_clr(str(portfolio.leverage)+'x', C.YELLOW, C.BOLD)}"
+          f"  {_clr('|', C.DIM)}  {_clr('Capital', C.GRAY)} {_clr(f'${portfolio.capital:,.2f}', C.CYAN, C.BOLD)}"
+          f"  {_clr('|', C.DIM)}  {_clr('T', C.GRAY)} {_clr(str(tc['T_up']), C.WHITE)}"
+          f"  {_clr('|', C.DIM)}  {_clr('SL', C.RED)} {tc.get('sl_pct',0)*100:.2f}%"
+          f"  {_clr('/', C.DIM)}  {_clr('TP', C.GREEN)} {tc.get('tp_pct',0)*100:.2f}%")
+    print(f" {_bl}  {_clr('Dashboard', C.GRAY)} {_clr('http://localhost:8080', C.BLUE, C.BOLD)}"
+          f"  {_clr('|', C.DIM)}  {_clr('Ctrl+C', C.YELLOW)} {_clr('to stop gracefully', C.GRAY)}")
+    print(f" {_bbot}\n")
 
     last_price = 0.0
     last_ts    = None
@@ -303,73 +309,63 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
             status  = "FLAT" if pos is None else ("LONG" if pos.direction == 1 else "SHORT")
 
             # ── Terminal status line ──────────────────────────────────────────
-            unreal     = equity - balance
-            # position colour
-            if pos is None:
-                pos_str = _clr(f"{'FLAT':5s}", C.GRAY)
-            elif pos.direction == 1:
-                pos_str = _clr(f"{'LONG':5s}", C.GREEN, C.BOLD)
-            else:
-                pos_str = _clr(f"{'SHORT':5s}", C.RED, C.BOLD)
+            unreal = equity - balance
+            _D = _clr(" | ", C.GRAY, C.DIM)   # column divider
 
-            # unrealised P&L colour
+            # position indicator
+            if pos is None:
+                pos_str = _clr("o FLAT ", C.GRAY, C.DIM)
+            elif pos.direction == 1:
+                pos_str = _clr("* LONG ", C.GREEN, C.BOLD)
+            else:
+                pos_str = _clr("* SHORT", C.RED,   C.BOLD)
+
+            # probabilities
+            pup_col = C.GREEN if p_up   >= engine.T_up   else C.GRAY
+            pdn_col = C.RED   if p_down >= engine.T_down else C.DIM
+            pup_str = _clr(f"^{p_up:.3f}", pup_col, C.BOLD if p_up >= engine.T_up else "")
+            pdn_str = _clr(f"v{p_down:.3f}", pdn_col, C.BOLD if p_down >= engine.T_down else "")
+
+            # balance + unrealised
+            bal_str = _clr(f"${balance:>9,.2f}", C.CYAN, C.BOLD)
             if pos is not None:
                 unreal_col = C.GREEN if unreal >= 0 else C.RED
-                unreal_str = "  " + _clr(f"unreal={unreal:+.2f}", unreal_col)
+                fin_str = bal_str + "  " + _clr(f"{unreal:+.2f}", unreal_col, C.BOLD)
             else:
-                unreal_str = ""
+                fin_str = bal_str
 
-            # probability colours
-            pup_col = C.GREEN if p_up   >= engine.T_up   else C.GRAY
-            pdn_col = C.RED   if p_down >= engine.T_down else C.GRAY
-
-            # balance / equity
-            eq_col = C.GREEN if equity >= balance else C.RED
-
-            # ── build colored condition string from structured data ───────────
-            sd = engine.last_skip_data
+            # ── condition string  ((LONG_side) OR (SHORT_side)) AND (shared) ──
+            sd  = engine.last_skip_data
             AND = _clr(" AND ", C.YELLOW, C.BOLD)
             OR  = _clr(" OR ",  C.MAGENTA, C.BOLD)
 
-            def _cv(val, ok, label) -> str:
-                """color a condition value: green=pass, red=fail"""
+            def _cv(val, ok, label="") -> str:
                 col = C.GREEN if ok else C.RED
                 return _clr(f"{label}{val}", col, C.BOLD)
 
             if sd.get("status") == "in_pos":
-                cond_str = _clr("IN POSITION", C.CYAN, C.BOLD)
+                cond_str = _clr("* IN POSITION", C.CYAN, C.BOLD)
             elif sd.get("status") == "cooldown":
-                cond_str = _clr(f"COOLDOWN {sd['bars']}bars", C.YELLOW, C.BOLD)
+                cond_str = _clr(f"~ COOLDOWN {sd['bars']}b", C.YELLOW, C.BOLD)
             elif sd.get("status") == "atr0":
-                cond_str = _clr("ATR=0", C.RED, C.BOLD)
+                cond_str = _clr("! ATR=0", C.RED, C.BOLD)
             elif sd.get("status") == "eval":
-                long_side  = (_cv(f"{sd['p_up']:.3f}", sd['p_up_ok'], "pu:")
-                              + AND
-                              + _cv(sd['rh'],           sd['rh_ok'],  "rh:"))
-                short_side = (_cv(f"{sd['p_dn']:.3f}", sd['p_dn_ok'], "pd:")
-                              + AND
-                              + _clr("rl:", C.GRAY) + _cv(sd['rl'],  sd['rl_ok'],  ""))
-                shared     = (_cv("sq",                 sd['sq_ok'],  "")
-                              + AND
-                              + _cv("ema",              sd['ema_ok'], "")
-                              + AND
-                              + _cv(f"{sd['cvd']:.2f}", sd['cvd_ok'], "cvd:")
-                              + AND
-                              + _cv(f"{sd['atr_r']:.2f}",sd['atr_ok'],"atr:"))
-                cond_str = (f"({long_side})" + OR + f"({short_side})"
-                            + AND + f"({shared})")
+                long_s  = (_cv(f"{sd['p_up']:.3f}", sd['p_up_ok'], "pu:")
+                           + AND + _cv(sd['rh'], sd['rh_ok'], "rh:"))
+                short_s = (_cv(f"{sd['p_dn']:.3f}", sd['p_dn_ok'], "pd:")
+                           + AND + _cv(sd['rl'], sd['rl_ok'], "rl:"))
+                shared  = (_cv("sq",  sd['sq_ok'])  + AND + _cv("ema", sd['ema_ok'])
+                           + AND + _cv(f"{sd['cvd']:.2f}",  sd['cvd_ok'],  "cvd:")
+                           + AND + _cv(f"{sd['atr_r']:.2f}", sd['atr_ok'], "atr:"))
+                signal  = f"({long_s})" + OR + f"({short_s})"
+                cond_str = f"({signal})" + AND + f"({shared})"
             else:
                 cond_str = _clr(engine.last_skip_reason, C.DIM)
 
             ts_str    = _clr(str(ts)[11:16], C.GRAY)
-            price_str = _clr(f"{price:>10.2f}", C.WHITE, C.BOLD)
-            pup_str   = _clr(f"▲{p_up:.3f}", pup_col)
-            pdn_str   = _clr(f"▼{p_down:.3f}", pdn_col)
-            bal_str   = _clr(f"${balance:.2f}", C.CYAN)
-            eq_str    = _clr(f"eq${equity:.2f}", eq_col)
+            price_str = _clr(f"{price:>10,.2f}", C.WHITE, C.BOLD)
 
-            print(f" {ts_str} {price_str} {pup_str} {pdn_str} "
-                  f"{pos_str} {bal_str} {eq_str}{unreal_str}  {cond_str}")
+            print(f" {ts_str}{_D}{price_str}{_D}{pup_str} {pdn_str}{_D}{pos_str}{_D}{fin_str}  {_D}  {cond_str}")
 
             # ── Browser stats ─────────────────────────────────────────────────
             n_trades = len(portfolio.trade_log)
@@ -406,18 +402,20 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
                     pos2     = portfolio.position
                     size_usd = pos2.size * pos2.entry_price
                     d        = event.get("direction", "")
-                    dir_col  = C.GREEN if d == "LONG" else C.RED
-                    sep      = _clr("─" * 60, C.BLUE)
-                    print(f"\n {sep}")
-                    print(f"  {_clr('ENTRY', C.BOLD, C.BG_BLUE, C.WHITE)}  "
-                          f"{_clr(d, dir_col, C.BOLD)}  "
-                          f"@ {_clr(f'{pos2.entry_price:,.2f}', C.WHITE, C.BOLD)}  "
-                          f"{_clr(f'size {pos2.size:.5f} {symbol[:3]} (${size_usd:,.2f})', C.GRAY)}")
-                    print(f"  {_clr('SL', C.RED,   C.BOLD)} {pos2.sl_price:>10,.2f}  "
-                          f"{_clr(f'-{abs(pos2.entry_price-pos2.sl_price):.2f} pts', C.RED)}")
-                    print(f"  {_clr('TP', C.GREEN, C.BOLD)} {pos2.tp_price:>10,.2f}  "
-                          f"{_clr(f'+{abs(pos2.tp_price-pos2.entry_price):.2f} pts', C.GREEN)}")
-                    print(f" {sep}\n")
+                    d_col    = C.GREEN if d == "LONG" else C.RED
+                    d_sym    = "^" if d == "LONG" else "v"
+                    _etop    = _clr("┌" + "─" * 60 + "┐", d_col, C.BOLD)
+                    _ebot    = _clr("└" + "─" * 60 + "┘", d_col, C.BOLD)
+                    _el      = _clr("│", d_col, C.BOLD)
+                    print(f"\n {_etop}")
+                    print(f" {_el}  {_clr(d_sym + ' ENTRY  ' + d, d_col, C.BOLD)}"
+                          f"  @  {_clr(f'{pos2.entry_price:,.2f}', C.WHITE, C.BOLD)}"
+                          f"  {_clr('|', C.DIM)}  {_clr(f'{pos2.size:.5f} {symbol[:3]}  ${size_usd:,.2f}', C.GRAY)}")
+                    print(f" {_el}  {_clr('SL', C.RED, C.BOLD)}  {_clr(f'{pos2.sl_price:,.2f}', C.RED, C.BOLD)}"
+                          f"  {_clr(f'( -{abs(pos2.entry_price - pos2.sl_price):.2f} pts )', C.RED, C.DIM)}")
+                    print(f" {_el}  {_clr('TP', C.GREEN, C.BOLD)}  {_clr(f'{pos2.tp_price:,.2f}', C.GREEN, C.BOLD)}"
+                          f"  {_clr(f'( +{abs(pos2.tp_price - pos2.entry_price):.2f} pts )', C.GREEN, C.DIM)}")
+                    print(f" {_ebot}\n")
 
                     await _broadcast({
                         "type":      "trade_open",
@@ -439,19 +437,22 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
                     nt     = len(portfolio.trade_log)
                     wins2  = sum(1 for t in portfolio.trade_log if t.net_pnl > 0)
                     wr     = f"{wins2/nt*100:.0f}%" if nt else "n/a"
-                    pnl_col   = C.GREEN if pnl >= 0 else C.RED
-                    pnl_str   = _clr(f"{'+'if pnl>=0 else ''}{pnl:,.2f}", pnl_col, C.BOLD)
-                    rsn_col   = C.GREEN if reason == "TP" else (C.RED if reason == "SL" else C.YELLOW)
-                    sep       = _clr("─" * 60, C.BLUE)
-                    print(f"\n {sep}")
-                    print(f"  {_clr('EXIT', C.BOLD, C.BG_RED if pnl<0 else C.BG_GREEN, C.WHITE)}  "
-                          f"{_clr(reason, rsn_col, C.BOLD)}  "
-                          f"@ {_clr(f'{exit_p:,.2f}', C.WHITE, C.BOLD)}  "
-                          f"PnL {pnl_str}")
-                    print(f"  {_clr('Balance', C.GRAY)} {_clr(f'${portfolio.capital:,.2f}', C.CYAN, C.BOLD)}  "
-                          f"{_clr(f'trades {nt}', C.GRAY)}  "
-                          f"{_clr(f'WR {wr}', C.GREEN if nt and wins2/nt>=0.6 else C.YELLOW)}")
-                    print(f" {sep}\n")
+                    pnl_col  = C.GREEN if pnl >= 0 else C.RED
+                    rsn_col  = C.GREEN if reason == "TP" else (C.RED if reason == "SL" else C.YELLOW)
+                    rsn_sym  = "+" if reason == "TP" else ("-" if reason == "SL" else "~")
+                    wr_col   = C.GREEN if nt and wins2/nt >= 0.6 else C.YELLOW
+                    pnl_sign = "+" if pnl >= 0 else ""
+                    _xtop    = _clr("┌" + "─" * 60 + "┐", rsn_col, C.BOLD)
+                    _xbot    = _clr("└" + "─" * 60 + "┘", rsn_col, C.BOLD)
+                    _xl      = _clr("│", rsn_col, C.BOLD)
+                    print(f"\n {_xtop}")
+                    print(f" {_xl}  {_clr(rsn_sym + ' EXIT  ' + reason, rsn_col, C.BOLD)}"
+                          f"  @  {_clr(f'{exit_p:,.2f}', C.WHITE, C.BOLD)}"
+                          f"  {_clr('|', C.DIM)}  PnL  {_clr(f'{pnl_sign}{pnl:,.2f}', pnl_col, C.BOLD)}")
+                    print(f" {_xl}  {_clr('Balance', C.GRAY)} {_clr(f'${portfolio.capital:,.2f}', C.CYAN, C.BOLD)}"
+                          f"  {_clr('|', C.DIM)}  trades {_clr(str(nt), C.WHITE, C.BOLD)}"
+                          f"  {_clr('|', C.DIM)}  WR {_clr(wr, wr_col, C.BOLD)}")
+                    print(f" {_xbot}\n")
 
                     last_t = portfolio.trade_log[-1] if portfolio.trade_log else None
                     await _broadcast({
@@ -473,40 +474,46 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
     finally:
         await feed.stop()
 
-        print(f"\n {_clr('─'*62, C.YELLOW)}")
+        _SW  = 60
+        _stop = _clr("╔" + "═" * _SW + "╗", C.YELLOW, C.BOLD)
+        _smid = _clr("╠" + "═" * _SW + "╣", C.YELLOW, C.BOLD)
+        _sbot = _clr("╚" + "═" * _SW + "╝", C.YELLOW, C.BOLD)
+        _sl   = _clr("║", C.YELLOW, C.BOLD)
+        print(f"\n {_stop}")
         if portfolio.position is not None:
-            d = 'LONG' if portfolio.position.direction == 1 else 'SHORT'
-            print(f"  {_clr('SHUTDOWN', C.BOLD, C.BG_YELLOW)} "
-                  f"closing {_clr(d, C.BOLD)}  "
-                  f"entry={portfolio.position.entry_price:.2f}  "
-                  f"last={last_price:.2f}")
+            d     = "LONG" if portfolio.position.direction == 1 else "SHORT"
+            d_col = C.GREEN if d == "LONG" else C.RED
+            print(f" {_sl}  {_clr('SHUTDOWN', C.YELLOW, C.BOLD)}  "
+                  f"closing {_clr(d, d_col, C.BOLD)}"
+                  f"  {_clr('|', C.DIM)}  entry {_clr(f'{portfolio.position.entry_price:,.2f}', C.WHITE)}"
+                  f"  last {_clr(f'{last_price:,.2f}', C.WHITE)}")
             if last_price <= 0:
-                print(f"  {_clr('WARNING', C.YELLOW)} last_price=0, fetching from Binance ...")
+                print(f" {_sl}  {_clr('! price=0  fetching from Binance...', C.YELLOW)}")
                 try:
                     ticker = portfolio._client.futures_symbol_ticker(symbol=symbol)
                     last_price = float(ticker["price"])
-                    print(f"  {_clr('Price fetched', C.GREEN)} {last_price:.2f}")
+                    print(f" {_sl}  {_clr('price ok', C.GREEN)}  {last_price:,.2f}")
                 except Exception as fe:
-                    print(f"  {_clr('Price fetch FAILED', C.RED)} {fe}")
+                    print(f" {_sl}  {_clr('price fetch FAILED', C.RED)}  {fe}")
             try:
                 engine.force_close(last_price, last_ts or "shutdown")
-                print(f"  {_clr('Position closed', C.GREEN, C.BOLD)}")
+                print(f" {_sl}  {_clr('Position closed', C.GREEN, C.BOLD)}")
             except Exception as ce:
-                print(f"  {_clr('force_close ERROR', C.RED)} {ce}")
+                print(f" {_sl}  {_clr('force_close ERROR', C.RED)}  {ce}")
         else:
-            print(f"  {_clr('No open position on exit', C.GRAY)}")
+            print(f" {_sl}  {_clr('No open position', C.GRAY)}")
 
         engine.close_log()
 
         summary = portfolio.summary()
-        sep2 = _clr("═" * 50, C.BLUE, C.BOLD)
-        print(f"\n {sep2}")
-        print(f"  {_clr('SESSION SUMMARY', C.BOLD, C.WHITE)}")
-        print(f" {_clr('─'*50, C.BLUE)}")
+        print(f" {_smid}")
+        print(f" {_sl}  {_clr('SESSION SUMMARY', C.WHITE, C.BOLD)}")
+        print(f" {_smid}")
         for k, v in summary.items():
-            val_col = C.GREEN if isinstance(v, (int,float)) and v > 0 else (C.RED if isinstance(v,(int,float)) and v < 0 else C.WHITE)
-            print(f"  {_clr(k+' ', C.GRAY)}{_clr(str(v), val_col, C.BOLD)}")
-        print(f" {sep2}")
+            val_col = (C.GREEN if isinstance(v, (int, float)) and v > 0
+                       else (C.RED if isinstance(v, (int, float)) and v < 0 else C.WHITE))
+            print(f" {_sl}  {_clr(f'{k:<22}', C.GRAY)} {_clr(str(v), val_col, C.BOLD)}")
+        print(f" {_sbot}")
 
         art = Path(art_dir)
         portfolio.save(str(art / "live_trade_portfolio.json"))
