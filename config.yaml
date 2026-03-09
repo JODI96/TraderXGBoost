@@ -227,7 +227,7 @@ trading:
                            # 0.0  = EMA9 must be above EMA21 (bullish crossover only)
                            # -999 = disabled
 
-  cooldown:        0      # bars to wait after a trade closes                [range: 0–60]
+  cooldown:        5      # bars to wait after a trade closes                [range: 0–60]
                            # 5 bars = 5-minute cooldown between trades
                            # decrease → more trades, can re-enter immediately
 
