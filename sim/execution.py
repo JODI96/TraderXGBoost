@@ -134,12 +134,12 @@ class ExecutionEngine:
             rh_str = f"{dist_rh:.2f}" if not np.isnan(dist_rh) else "nan"
             rl_str = f"{dist_rl:.2f}" if not np.isnan(dist_rl) else "nan"
 
-            _Y = lambda v: "(Y)" if v else "(N)"
+            _y = lambda v: "Y" if v else "N"
             self.last_skip_reason = (
-                f"[(p_up={p_up:.3f} {_Y(p_up>=self.T_up)} AND rh={rh_str} {_Y(rh_ok)})"
-                f" OR (p_dn={p_down:.3f} {_Y(p_down>=self.T_down)} AND rl={rl_str} {_Y(rl_ok)})]"
-                f" AND sq {_Y(sq_ok)} AND ema {_Y(ema_ok)}"
-                f" AND cvd={cvd_slope:.2f} {_Y(cvd_ok)} AND atr_r={atr_ratio:.2f} {_Y(atr_rat_ok)}"
+                f"pu:{p_up:.3f}{_y(p_up>=self.T_up)} rh:{rh_str}{_y(rh_ok)}"
+                f" | pd:{p_down:.3f}{_y(p_down>=self.T_down)} rl:{rl_str}{_y(rl_ok)}"
+                f" | sq:{_y(sq_ok)} ema:{_y(ema_ok)}"
+                f" cvd:{cvd_slope:.2f}{_y(cvd_ok)} atr:{atr_ratio:.2f}{_y(atr_rat_ok)}"
             )
 
             # LONG: up-break anticipated

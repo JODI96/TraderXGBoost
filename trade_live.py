@@ -326,17 +326,16 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
             # balance / equity
             eq_col = C.GREEN if equity >= balance else C.RED
 
-            ts_str   = _clr(f"{str(ts)[11:16]}", C.GRAY)           # HH:MM only
-            price_str= _clr(f"{price:>10,.2f}", C.WHITE, C.BOLD)
-            pup_str  = _clr(f"p▲{p_up:.3f}", pup_col)
-            pdn_str  = _clr(f"p▼{p_down:.3f}", pdn_col)
-            bal_str  = _clr(f"bal ${balance:>9,.2f}", C.CYAN)
-            eq_str   = _clr(f"eq ${equity:>9,.2f}", eq_col)
-            skip_str = _clr(f"{engine.last_skip_reason}", C.DIM)
+            ts_str    = _clr(str(ts)[11:16], C.GRAY)
+            price_str = _clr(f"{price:>10.2f}", C.WHITE, C.BOLD)
+            pup_str   = _clr(f"▲{p_up:.3f}", pup_col)
+            pdn_str   = _clr(f"▼{p_down:.3f}", pdn_col)
+            bal_str   = _clr(f"${balance:.2f}", C.CYAN)
+            eq_str    = _clr(f"eq${equity:.2f}", eq_col)
+            skip_str  = _clr(engine.last_skip_reason, C.DIM)
 
-            print(f" {ts_str}  {price_str}  {pup_str}  {pdn_str}  "
-                  f"{pos_str}  {bal_str}  {eq_str}{unreal_str}"
-                  f"  {skip_str}")
+            print(f" {ts_str} {price_str} {pup_str} {pdn_str} "
+                  f"{pos_str} {bal_str} {eq_str}{unreal_str} {skip_str}")
 
             # ── Browser stats ─────────────────────────────────────────────────
             n_trades = len(portfolio.trade_log)
