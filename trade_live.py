@@ -60,6 +60,29 @@ _logging.getLogger("websockets.server").setLevel(logging.CRITICAL)
 import urllib.request as _urllib_req
 
 import features as feat_mod
+
+# ── ANSI colours (work on Linux/macOS/Windows Terminal) ───────────────────────
+class C:
+    RESET  = "\033[0m"
+    BOLD   = "\033[1m"
+    DIM    = "\033[2m"
+    # text
+    WHITE  = "\033[97m"
+    GRAY   = "\033[90m"
+    CYAN   = "\033[96m"
+    YELLOW = "\033[93m"
+    GREEN  = "\033[92m"
+    RED    = "\033[91m"
+    BLUE   = "\033[94m"
+    MAGENTA= "\033[95m"
+    # background
+    BG_GREEN  = "\033[42m"
+    BG_RED    = "\033[41m"
+    BG_BLUE   = "\033[44m"
+    BG_YELLOW = "\033[43m"
+
+def _clr(text, *codes) -> str:
+    return "".join(codes) + str(text) + C.RESET
 from sim.execution          import ExecutionEngine
 from sim.binance_portfolio  import BinancePortfolio
 from sim.binance_ws_feed    import BinanceWSFeed
@@ -220,17 +243,18 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
     feed   = BinanceWSFeed(symbol=symbol, ws_url=ws_url)
 
     # ── Banner ────────────────────────────────────────────────────────────────
-    print()
-    print("=" * 62)
-    print("  *** LIVE TRADING – REAL MONEY ON BINANCE FUTURES ***")
-    print(f"  Symbol   : {symbol}")
-    print(f"  Leverage : {portfolio.leverage}x  (position_size_pct in config)")
-    print(f"  Balance  : ${portfolio.capital:,.2f} USDT")
-    print(f"  T_up/dn  : {tc['T_up']} / {tc['T_down']}")
-    print(f"  SL/TP    : {tc.get('sl_pct',0)*100:.2f}% / {tc.get('tp_pct',0)*100:.2f}%")
-    print(f"  Dashboard: http://localhost:8080")
-    print("=" * 62)
-    print("  Ctrl+C to stop gracefully (open position will be closed)")
+    sep = _clr("═" * 62, C.BLUE, C.BOLD)
+    print(f"\n {sep}")
+    print(f"  {_clr('LIVE TRADING', C.BOLD, C.BG_BLUE, C.WHITE)}  "
+          f"{_clr('REAL MONEY · BINANCE FUTURES', C.YELLOW, C.BOLD)}")
+    print(f"  {_clr('Symbol  ', C.GRAY)} {_clr(symbol, C.WHITE, C.BOLD)}"
+          f"   {_clr('Leverage', C.GRAY)} {_clr(str(portfolio.leverage)+'x', C.YELLOW, C.BOLD)}"
+          f"   {_clr('Balance', C.GRAY)} {_clr(f'${portfolio.capital:,.2f}', C.CYAN, C.BOLD)}")
+    print(f"  {_clr('T_up/dn ', C.GRAY)} {tc['T_up']} / {tc['T_down']}"
+          f"   {_clr('SL/TP', C.GRAY)} {tc.get('sl_pct',0)*100:.2f}% / {tc.get('tp_pct',0)*100:.2f}%"
+          f"   {_clr('Dashboard', C.GRAY)} {_clr('http://localhost:8080', C.BLUE)}")
+    print(f" {sep}")
+    print(f"  {_clr('Ctrl+C', C.YELLOW)} to stop  ·  open position will be closed")
     print()
 
     last_price = 0.0
@@ -279,15 +303,40 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
             status  = "FLAT" if pos is None else ("LONG" if pos.direction == 1 else "SHORT")
 
             # ── Terminal status line ──────────────────────────────────────────
-            unreal_str = ""
+            unreal     = equity - balance
+            # position colour
+            if pos is None:
+                pos_str = _clr(f"{'FLAT':5s}", C.GRAY)
+            elif pos.direction == 1:
+                pos_str = _clr(f"{'LONG':5s}", C.GREEN, C.BOLD)
+            else:
+                pos_str = _clr(f"{'SHORT':5s}", C.RED, C.BOLD)
+
+            # unrealised P&L colour
             if pos is not None:
-                unreal     = equity - balance
-                unreal_str = f"  unreal={unreal:+.2f}"
-            print(f"  [{ts}]  {price:>10.2f}  "
-                  f"p_up={p_up:.3f}  p_dn={p_down:.3f}  "
-                  f"pos={status:5s}  "
-                  f"bal=${balance:>10,.2f}  eq=${equity:>10,.2f}{unreal_str}"
-                  f"  | {engine.last_skip_reason}")
+                unreal_col = C.GREEN if unreal >= 0 else C.RED
+                unreal_str = "  " + _clr(f"unreal={unreal:+.2f}", unreal_col)
+            else:
+                unreal_str = ""
+
+            # probability colours
+            pup_col = C.GREEN if p_up   >= engine.T_up   else C.GRAY
+            pdn_col = C.RED   if p_down >= engine.T_down else C.GRAY
+
+            # balance / equity
+            eq_col = C.GREEN if equity >= balance else C.RED
+
+            ts_str   = _clr(f"{str(ts)[11:16]}", C.GRAY)           # HH:MM only
+            price_str= _clr(f"{price:>10,.2f}", C.WHITE, C.BOLD)
+            pup_str  = _clr(f"p▲{p_up:.3f}", pup_col)
+            pdn_str  = _clr(f"p▼{p_down:.3f}", pdn_col)
+            bal_str  = _clr(f"bal ${balance:>9,.2f}", C.CYAN)
+            eq_str   = _clr(f"eq ${equity:>9,.2f}", eq_col)
+            skip_str = _clr(f"{engine.last_skip_reason}", C.DIM)
+
+            print(f" {ts_str}  {price_str}  {pup_str}  {pdn_str}  "
+                  f"{pos_str}  {bal_str}  {eq_str}{unreal_str}"
+                  f"  {skip_str}")
 
             # ── Browser stats ─────────────────────────────────────────────────
             n_trades = len(portfolio.trade_log)
@@ -323,14 +372,19 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
                 if ev_type == "OPEN" and portfolio.position is not None:
                     pos2     = portfolio.position
                     size_usd = pos2.size * pos2.entry_price
-                    print(f"\n  {'='*58}")
-                    print(f"  ENTRY  {event.get('direction'):5s}  @ {pos2.entry_price:.2f}")
-                    print(f"    SL   : {pos2.sl_price:.2f}  "
-                          f"({abs(pos2.entry_price - pos2.sl_price):.2f} pts)")
-                    print(f"    TP   : {pos2.tp_price:.2f}  "
-                          f"({abs(pos2.tp_price - pos2.entry_price):.2f} pts)")
-                    print(f"    Size : {pos2.size:.6f} {symbol[:3]}  (${size_usd:,.2f})")
-                    print(f"  {'='*58}\n")
+                    d        = event.get("direction", "")
+                    dir_col  = C.GREEN if d == "LONG" else C.RED
+                    sep      = _clr("─" * 60, C.BLUE)
+                    print(f"\n {sep}")
+                    print(f"  {_clr('ENTRY', C.BOLD, C.BG_BLUE, C.WHITE)}  "
+                          f"{_clr(d, dir_col, C.BOLD)}  "
+                          f"@ {_clr(f'{pos2.entry_price:,.2f}', C.WHITE, C.BOLD)}  "
+                          f"{_clr(f'size {pos2.size:.5f} {symbol[:3]} (${size_usd:,.2f})', C.GRAY)}")
+                    print(f"  {_clr('SL', C.RED,   C.BOLD)} {pos2.sl_price:>10,.2f}  "
+                          f"{_clr(f'-{abs(pos2.entry_price-pos2.sl_price):.2f} pts', C.RED)}")
+                    print(f"  {_clr('TP', C.GREEN, C.BOLD)} {pos2.tp_price:>10,.2f}  "
+                          f"{_clr(f'+{abs(pos2.tp_price-pos2.entry_price):.2f} pts', C.GREEN)}")
+                    print(f" {sep}\n")
 
                     await _broadcast({
                         "type":      "trade_open",
@@ -346,19 +400,25 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
                     })
 
                 elif ev_type == "CLOSE":
-                    pnl      = event.get("net_pnl", 0)
-                    reason   = event.get("reason", "")
-                    pnl_sign = "+" if pnl >= 0 else ""
-                    nt       = len(portfolio.trade_log)
-                    wins2    = sum(1 for t in portfolio.trade_log if t.net_pnl > 0)
-                    wr       = f"{wins2/nt*100:.0f}%" if nt else "n/a"
-                    exit_p   = event.get("exit_price", price)
-                    print(f"\n  {'='*58}")
-                    print(f"  EXIT   {reason:6s} @ {exit_p:.2f}  "
-                          f"PnL: {pnl_sign}${pnl:.2f}")
-                    print(f"    New balance : ${portfolio.capital:,.2f}")
-                    print(f"    Total trades: {nt}   Win rate: {wr}")
-                    print(f"  {'='*58}\n")
+                    pnl    = event.get("net_pnl", 0)
+                    reason = event.get("reason", "")
+                    exit_p = event.get("exit_price", price)
+                    nt     = len(portfolio.trade_log)
+                    wins2  = sum(1 for t in portfolio.trade_log if t.net_pnl > 0)
+                    wr     = f"{wins2/nt*100:.0f}%" if nt else "n/a"
+                    pnl_col   = C.GREEN if pnl >= 0 else C.RED
+                    pnl_str   = _clr(f"{'+'if pnl>=0 else ''}{pnl:,.2f}", pnl_col, C.BOLD)
+                    rsn_col   = C.GREEN if reason == "TP" else (C.RED if reason == "SL" else C.YELLOW)
+                    sep       = _clr("─" * 60, C.BLUE)
+                    print(f"\n {sep}")
+                    print(f"  {_clr('EXIT', C.BOLD, C.BG_RED if pnl<0 else C.BG_GREEN, C.WHITE)}  "
+                          f"{_clr(reason, rsn_col, C.BOLD)}  "
+                          f"@ {_clr(f'{exit_p:,.2f}', C.WHITE, C.BOLD)}  "
+                          f"PnL {pnl_str}")
+                    print(f"  {_clr('Balance', C.GRAY)} {_clr(f'${portfolio.capital:,.2f}', C.CYAN, C.BOLD)}  "
+                          f"{_clr(f'trades {nt}', C.GRAY)}  "
+                          f"{_clr(f'WR {wr}', C.GREEN if nt and wins2/nt>=0.6 else C.YELLOW)}")
+                    print(f" {sep}\n")
 
                     last_t = portfolio.trade_log[-1] if portfolio.trade_log else None
                     await _broadcast({
@@ -380,36 +440,40 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
     finally:
         await feed.stop()
 
+        print(f"\n {_clr('─'*62, C.YELLOW)}")
         if portfolio.position is not None:
-            print("\n  Ctrl+C detected – closing open position ...")
-            print(f"  Position: {'LONG' if portfolio.position.direction == 1 else 'SHORT'}"
-                  f"  entry={portfolio.position.entry_price:.2f}"
-                  f"  size={portfolio.position.size}"
-                  f"  last_price={last_price:.2f}")
+            d = 'LONG' if portfolio.position.direction == 1 else 'SHORT'
+            print(f"  {_clr('SHUTDOWN', C.BOLD, C.BG_YELLOW)} "
+                  f"closing {_clr(d, C.BOLD)}  "
+                  f"entry={portfolio.position.entry_price:.2f}  "
+                  f"last={last_price:.2f}")
             if last_price <= 0:
-                print("  WARNING: last_price=0, fetching current price from Binance ...")
+                print(f"  {_clr('WARNING', C.YELLOW)} last_price=0, fetching from Binance ...")
                 try:
                     ticker = portfolio._client.futures_symbol_ticker(symbol=symbol)
                     last_price = float(ticker["price"])
-                    print(f"  Current price fetched: {last_price:.2f}")
+                    print(f"  {_clr('Price fetched', C.GREEN)} {last_price:.2f}")
                 except Exception as fe:
-                    print(f"  Price fetch failed: {fe}")
+                    print(f"  {_clr('Price fetch FAILED', C.RED)} {fe}")
             try:
                 engine.force_close(last_price, last_ts or "shutdown")
-                print("  Position closed successfully.")
+                print(f"  {_clr('Position closed', C.GREEN, C.BOLD)}")
             except Exception as ce:
-                print(f"  force_close ERROR: {ce}")
+                print(f"  {_clr('force_close ERROR', C.RED)} {ce}")
         else:
-            print("\n  No open position on exit.")
+            print(f"  {_clr('No open position on exit', C.GRAY)}")
 
         engine.close_log()
 
         summary = portfolio.summary()
-        print(f"\n{'='*50}")
-        print(" Live Trading Session Summary")
-        print(f"{'='*50}")
+        sep2 = _clr("═" * 50, C.BLUE, C.BOLD)
+        print(f"\n {sep2}")
+        print(f"  {_clr('SESSION SUMMARY', C.BOLD, C.WHITE)}")
+        print(f" {_clr('─'*50, C.BLUE)}")
         for k, v in summary.items():
-            print(f"  {k:25s}: {v}")
+            val_col = C.GREEN if isinstance(v, (int,float)) and v > 0 else (C.RED if isinstance(v,(int,float)) and v < 0 else C.WHITE)
+            print(f"  {_clr(k+' ', C.GRAY)}{_clr(str(v), val_col, C.BOLD)}")
+        print(f" {sep2}")
 
         art = Path(art_dir)
         portfolio.save(str(art / "live_trade_portfolio.json"))
