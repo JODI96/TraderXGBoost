@@ -60,6 +60,7 @@ class ExecutionEngine:
         self._log_fh = open(log_path, "a", buffering=1)   # line-buffered
 
         self.bar_count = 0
+        self.last_skip_reason = ""
 
     # ── Per-bar entry point ───────────────────────────────────────────────────
     def on_bar(
@@ -111,9 +112,29 @@ class ExecutionEngine:
                                **self._trade_dict(trade)}
 
         # ── 3. Entry logic ────────────────────────────────────────────────────
-        if self.port.can_enter and atr > 0:
+        if not self.port.can_enter:
+            if self.port.position is not None:
+                self.last_skip_reason = "in_pos"
+            else:
+                self.last_skip_reason = f"cooldown={self.port._cooldown_rem}"
+        elif atr <= 0:
+            self.last_skip_reason = "atr=0"
+        else:
             sq_ok  = (not self.req_sq) or (squeeze == 1)
             ema_ok = ema9_21_diff >= self.min_ema9_21
+
+            rh_ok  = (not np.isnan(dist_rh)) and dist_rh <= self.d_max
+            rl_ok  = (not np.isnan(dist_rl)) and dist_rl <= self.d_max
+            rh_str = f"{dist_rh:.2f}" if not np.isnan(dist_rh) else "nan"
+            rl_str = f"{dist_rl:.2f}" if not np.isnan(dist_rl) else "nan"
+
+            # Format: (LONG: p_up AND rh) OR (SHORT: p_dn AND rl)  AND sq AND ema
+            _Y = lambda v: "(Y)" if v else "(N)"
+            self.last_skip_reason = (
+                f"[(p_up={p_up:.3f} {_Y(p_up>=self.T_up)} AND rh={rh_str} {_Y(rh_ok)})"
+                f" OR (p_dn={p_down:.3f} {_Y(p_down>=self.T_down)} AND rl={rl_str} {_Y(rl_ok)})]"
+                f" AND sq {_Y(sq_ok)} AND ema {_Y(ema_ok)}"
+            )
 
             # LONG: up-break anticipated
             if (p_up >= self.T_up and
@@ -130,15 +151,14 @@ class ExecutionEngine:
                     sl_pct    = self.sl_pct,
                     tp_pct    = self.tp_pct,
                 )
+                self.last_skip_reason = "ENTERED_LONG"
                 trade_event = {"event": "OPEN", "direction": "LONG",
                                "price": price, "p_up": p_up,
                                "sl": self.port.position.sl_price,
                                "tp": self.port.position.tp_price}
 
             # SHORT: down-break anticipated
-            elif (p_down >= self.T_down and
-                    not np.isnan(dist_rl) and dist_rl <= self.d_max and
-                    sq_ok and ema_ok):
+            elif (p_down >= self.T_down and rl_ok and sq_ok and ema_ok):
                 self.port.open_trade(
                     direction = -1,
                     price     = price,
@@ -150,6 +170,7 @@ class ExecutionEngine:
                     sl_pct    = self.sl_pct,
                     tp_pct    = self.tp_pct,
                 )
+                self.last_skip_reason = "ENTERED_SHORT"
                 trade_event = {"event": "OPEN", "direction": "SHORT",
                                "price": price, "p_down": p_down,
                                "sl": self.port.position.sl_price,

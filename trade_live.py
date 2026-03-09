@@ -286,7 +286,8 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
             print(f"  [{ts}]  {price:>10.2f}  "
                   f"p_up={p_up:.3f}  p_dn={p_down:.3f}  "
                   f"pos={status:5s}  "
-                  f"bal=${balance:>10,.2f}  eq=${equity:>10,.2f}{unreal_str}")
+                  f"bal=${balance:>10,.2f}  eq=${equity:>10,.2f}{unreal_str}"
+                  f"  | {engine.last_skip_reason}")
 
             # ── Browser stats ─────────────────────────────────────────────────
             n_trades = len(portfolio.trade_log)
@@ -380,8 +381,26 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
         await feed.stop()
 
         if portfolio.position is not None:
-            print("\n  Closing open position before exit ...")
-            engine.force_close(last_price, last_ts or "end")
+            print("\n  Ctrl+C detected – closing open position ...")
+            print(f"  Position: {'LONG' if portfolio.position.direction == 1 else 'SHORT'}"
+                  f"  entry={portfolio.position.entry_price:.2f}"
+                  f"  size={portfolio.position.size}"
+                  f"  last_price={last_price:.2f}")
+            if last_price <= 0:
+                print("  WARNING: last_price=0, fetching current price from Binance ...")
+                try:
+                    ticker = portfolio._client.futures_symbol_ticker(symbol=symbol)
+                    last_price = float(ticker["price"])
+                    print(f"  Current price fetched: {last_price:.2f}")
+                except Exception as fe:
+                    print(f"  Price fetch failed: {fe}")
+            try:
+                engine.force_close(last_price, last_ts or "shutdown")
+                print("  Position closed successfully.")
+            except Exception as ce:
+                print(f"  force_close ERROR: {ce}")
+        else:
+            print("\n  No open position on exit.")
 
         engine.close_log()
 
