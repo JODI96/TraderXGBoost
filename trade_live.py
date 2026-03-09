@@ -326,16 +326,50 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
             # balance / equity
             eq_col = C.GREEN if equity >= balance else C.RED
 
+            # ── build colored condition string from structured data ───────────
+            sd = engine.last_skip_data
+            AND = _clr(" AND ", C.YELLOW, C.BOLD)
+            OR  = _clr(" OR ",  C.MAGENTA, C.BOLD)
+
+            def _cv(val, ok, label) -> str:
+                """color a condition value: green=pass, red=fail"""
+                col = C.GREEN if ok else C.RED
+                return _clr(f"{label}{val}", col, C.BOLD)
+
+            if sd.get("status") == "in_pos":
+                cond_str = _clr("IN POSITION", C.CYAN, C.BOLD)
+            elif sd.get("status") == "cooldown":
+                cond_str = _clr(f"COOLDOWN {sd['bars']}bars", C.YELLOW, C.BOLD)
+            elif sd.get("status") == "atr0":
+                cond_str = _clr("ATR=0", C.RED, C.BOLD)
+            elif sd.get("status") == "eval":
+                long_side  = (_cv(f"{sd['p_up']:.3f}", sd['p_up_ok'], "pu:")
+                              + AND
+                              + _cv(sd['rh'],           sd['rh_ok'],  "rh:"))
+                short_side = (_cv(f"{sd['p_dn']:.3f}", sd['p_dn_ok'], "pd:")
+                              + AND
+                              + _clr("rl:", C.GRAY) + _cv(sd['rl'],  sd['rl_ok'],  ""))
+                shared     = (_cv("sq",                 sd['sq_ok'],  "")
+                              + AND
+                              + _cv("ema",              sd['ema_ok'], "")
+                              + AND
+                              + _cv(f"{sd['cvd']:.2f}", sd['cvd_ok'], "cvd:")
+                              + AND
+                              + _cv(f"{sd['atr_r']:.2f}",sd['atr_ok'],"atr:"))
+                cond_str = (f"({long_side})" + OR + f"({short_side})"
+                            + AND + f"({shared})")
+            else:
+                cond_str = _clr(engine.last_skip_reason, C.DIM)
+
             ts_str    = _clr(str(ts)[11:16], C.GRAY)
             price_str = _clr(f"{price:>10.2f}", C.WHITE, C.BOLD)
             pup_str   = _clr(f"▲{p_up:.3f}", pup_col)
             pdn_str   = _clr(f"▼{p_down:.3f}", pdn_col)
             bal_str   = _clr(f"${balance:.2f}", C.CYAN)
             eq_str    = _clr(f"eq${equity:.2f}", eq_col)
-            skip_str  = _clr(engine.last_skip_reason, C.DIM)
 
             print(f" {ts_str} {price_str} {pup_str} {pdn_str} "
-                  f"{pos_str} {bal_str} {eq_str}{unreal_str} {skip_str}")
+                  f"{pos_str} {bal_str} {eq_str}{unreal_str}  {cond_str}")
 
             # ── Browser stats ─────────────────────────────────────────────────
             n_trades = len(portfolio.trade_log)
