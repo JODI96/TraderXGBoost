@@ -227,19 +227,33 @@ trading:
                            # 0.0  = EMA9 must be above EMA21 (bullish crossover only)
                            # -999 = disabled
 
+  max_cvd_slope:   1.02   # max CVD slope to allow entry                     [range: 0.0–10.0]
+                           # cvd_slope = 5-bar slope of cumulative delta (orderflow)
+                           # >1.02 = CVD already accelerating upward = buying climax / exhaustion
+                           # entering LONG into rising CVD slope means buying into a top
+                           # analysis: blocks 50% of losses, only 10% of wins -> PF 2.91
+                           # 999 = disabled
+
+  max_atr_ratio:   1.06   # max atr_short/atr_long ratio to allow entry      [range: 1.0–3.0]
+                           # atr_ratio > 1 = current volatility spiking above long-run baseline
+                           # SL becomes too tight relative to actual market noise
+                           # analysis: blocks 29% of losses, 12.5% of wins -> PF 2.33
+                           # combo with max_cvd_slope: PF 7.56, WR 73.3%, 45 trades
+                           # 999 = disabled
+
   cooldown:        5      # bars to wait after a trade closes                [range: 0–60]
                            # 5 bars = 5-minute cooldown between trades
                            # decrease → more trades, can re-enter immediately
 
   max_positions:   1      # maximum simultaneous open trades; keep at 1 for single-position mode
-  initial_capital: 10.0  # starting capital in USD
-  position_size_pct: 30.0    # fraction of capital risked per trade           [range: 0.01–10.0]
+  initial_capital: 1000.0  # starting capital in USD
+  position_size_pct: 150.0    # fraction of capital risked per trade           [range: 0.01–10.0]
                              # 3.0 = 3x leverage; SL=-0.45% capital, TP=+1.35% capital per trade
 
 # ── Sweep (grid search over T and leverage) ───────────────────────────────────
 sweep:
   T_values:       [0.58, 0.60, 0.62, 0.64, 0.66, 0.67, 0.68, 0.69, 0.70]
-  leverages:      [10.0, 20.0, 30.0]
+  leverages:      [10.0, 20.0, 30.0, 50, 100, 150]
   liq_threshold:  0.20     # liquidated when capital < 20% of initial
   n_sims:         20000    # Monte Carlo simulations per scenario
 

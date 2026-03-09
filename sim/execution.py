@@ -50,6 +50,8 @@ class ExecutionEngine:
         self.pos_pct   = tc["position_size_pct"]
         self.req_sq       = tc.get("require_squeeze", False)
         self.min_ema9_21  = tc.get("min_ema9_21_diff", -999.0)
+        self.max_cvd_slope = tc.get("max_cvd_slope",  999.0)
+        self.max_atr_ratio = tc.get("max_atr_ratio",  999.0)
         self.L_range      = lc.get("L_range", 20)
 
         self.cost_rt = (lc["maker_fee"] + lc["taker_fee"] +
@@ -89,6 +91,8 @@ class ExecutionEngine:
         dist_rl      = _f(f"dist_rl_{self.L_range}", np.nan)
         squeeze      = int(_f("squeeze_flag", 0))
         ema9_21_diff = _f("ema9_21_diff", 999.0)
+        cvd_slope    = _f("cvd_slope",    0.0)
+        atr_ratio    = _f("atr_ratio",    0.0)
 
         p_down, p_no_break, p_up = float(probs[0]), float(probs[1]), float(probs[2])
         pred_class = int(np.argmax(probs))
@@ -120,26 +124,28 @@ class ExecutionEngine:
         elif atr <= 0:
             self.last_skip_reason = "atr=0"
         else:
-            sq_ok  = (not self.req_sq) or (squeeze == 1)
-            ema_ok = ema9_21_diff >= self.min_ema9_21
+            sq_ok       = (not self.req_sq) or (squeeze == 1)
+            ema_ok      = ema9_21_diff >= self.min_ema9_21
+            cvd_ok      = cvd_slope    <= self.max_cvd_slope
+            atr_rat_ok  = atr_ratio    <= self.max_atr_ratio
 
             rh_ok  = (not np.isnan(dist_rh)) and dist_rh <= self.d_max
             rl_ok  = (not np.isnan(dist_rl)) and dist_rl <= self.d_max
             rh_str = f"{dist_rh:.2f}" if not np.isnan(dist_rh) else "nan"
             rl_str = f"{dist_rl:.2f}" if not np.isnan(dist_rl) else "nan"
 
-            # Format: (LONG: p_up AND rh) OR (SHORT: p_dn AND rl)  AND sq AND ema
             _Y = lambda v: "(Y)" if v else "(N)"
             self.last_skip_reason = (
                 f"[(p_up={p_up:.3f} {_Y(p_up>=self.T_up)} AND rh={rh_str} {_Y(rh_ok)})"
                 f" OR (p_dn={p_down:.3f} {_Y(p_down>=self.T_down)} AND rl={rl_str} {_Y(rl_ok)})]"
                 f" AND sq {_Y(sq_ok)} AND ema {_Y(ema_ok)}"
+                f" AND cvd={cvd_slope:.2f} {_Y(cvd_ok)} AND atr_r={atr_ratio:.2f} {_Y(atr_rat_ok)}"
             )
 
             # LONG: up-break anticipated
             if (p_up >= self.T_up and
                     not np.isnan(dist_rh) and dist_rh <= self.d_max and
-                    sq_ok and ema_ok):
+                    sq_ok and ema_ok and cvd_ok and atr_rat_ok):
                 self.port.open_trade(
                     direction = 1,
                     price     = price,
@@ -158,7 +164,7 @@ class ExecutionEngine:
                                "tp": self.port.position.tp_price}
 
             # SHORT: down-break anticipated
-            elif (p_down >= self.T_down and rl_ok and sq_ok and ema_ok):
+            elif (p_down >= self.T_down and rl_ok and sq_ok and ema_ok and cvd_ok and atr_rat_ok):
                 self.port.open_trade(
                     direction = -1,
                     price     = price,

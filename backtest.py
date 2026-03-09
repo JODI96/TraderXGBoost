@@ -139,6 +139,12 @@ def run_backtest(
     min_ema9_21  = min_ema9_21 if min_ema9_21 is not None else tc.get("min_ema9_21_diff", -999.0)
     ema9_21_diff = df_feat["ema9_21_diff"].values if "ema9_21_diff" in df_feat.columns \
                    else np.full(n, 999.0)
+    max_cvd_slope = tc.get("max_cvd_slope", 999.0)
+    max_atr_ratio = tc.get("max_atr_ratio", 999.0)
+    cvd_slope    = df_feat["cvd_slope"].values if "cvd_slope" in df_feat.columns \
+                   else np.zeros(n)
+    atr_ratio    = df_feat["atr_ratio"].values if "atr_ratio" in df_feat.columns \
+                   else np.zeros(n)
 
     p_down = probs[:, 0]
     p_up   = probs[:, 2]
@@ -225,14 +231,16 @@ def run_backtest(
 
         # ── Entry logic ───────────────────────────────────────────────────────
         if pos_dir == 0:
-            sq_ok   = (not req_sq) or sq_col[i] == 1
-            vol_ok  = vol_regime[i] >= min_vol
-            ema_ok  = ema9_21_diff[i] >= min_ema9_21
+            sq_ok      = (not req_sq) or sq_col[i] == 1
+            vol_ok     = vol_regime[i] >= min_vol
+            ema_ok     = ema9_21_diff[i] >= min_ema9_21
+            cvd_ok     = cvd_slope[i]    <= max_cvd_slope
+            atr_rat_ok = atr_ratio[i]    <= max_atr_ratio
 
             # LONG: imminent up-breakout
             if (p_up[i] >= T_u and
                     not np.isnan(dist_rh[i]) and dist_rh[i] <= dmax and
-                    sq_ok and vol_ok and ema_ok):
+                    sq_ok and vol_ok and ema_ok and cvd_ok and atr_rat_ok):
                 entry_price  = c
                 pos_size     = (capital * pos_pct) / (c + 1e-9)
                 if use_pct:
@@ -247,7 +255,7 @@ def run_backtest(
             # SHORT: imminent down-breakout
             elif (p_down[i] >= T_d and
                     not np.isnan(dist_rl[i]) and dist_rl[i] <= dmax and
-                    sq_ok and vol_ok and ema_ok):
+                    sq_ok and vol_ok and ema_ok and cvd_ok and atr_rat_ok):
                 entry_price  = c
                 pos_size     = (capital * pos_pct) / (c + 1e-9)
                 if use_pct:
