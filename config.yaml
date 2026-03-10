@@ -197,11 +197,13 @@ training:
 
 # ── Trading Signal ────────────────────────────────────────────────────────────
 trading:
-  T_up:            0.67   # min model probability for UP_BREAK -> LONG entry  [range: 0.3-0.9]
+  T_up:            0.66   # min model probability for UP_BREAK -> LONG entry  [range: 0.3-0.9]
+                           # 0.66 = sweet spot with near-range trained model
+                           # gives PF>1.2 on all 3 years (2023/2024/2025)
                            # increase → fewer but higher-confidence entries (better precision)
                            # decrease → more entries but more false signals
 
-  T_down:          0.67   # min model probability for DOWN_BREAK → SHORT entry [range: 0.3–0.9]
+  T_down:          0.66   # min model probability for DOWN_BREAK → SHORT entry [range: 0.3–0.9]
                            # same logic as T_up
 
   d_max_atr:       1.5    # max distance from price to range boundary (ATR)  [range: 0.5–5.0]
@@ -246,8 +248,8 @@ trading:
                            # decrease → more trades, can re-enter immediately
 
   max_positions:   1      # maximum simultaneous open trades; keep at 1 for single-position mode
-  initial_capital: 1000.0  # starting capital in USD
-  position_size_pct: 150.0    # fraction of capital risked per trade           [range: 0.01–10.0]
+  initial_capital: 100.0  # starting capital in USD
+  position_size_pct: 50.0    # fraction of capital risked per trade           [range: 0.01–10.0]
                              # 3.0 = 3x leverage; SL=-0.45% capital, TP=+1.35% capital per trade
 
 # ── Sweep (grid search over T and leverage) ───────────────────────────────────

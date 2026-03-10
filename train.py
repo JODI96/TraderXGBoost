@@ -243,6 +243,19 @@ def main() -> None:
         # Keep only known feature columns that exist for this coin
         fc = [c for c in feat_cols if c in df_feat.columns]
         piece = df_feat[fc].join(df_lab[["label"]], how="inner").dropna()
+
+        # ── Near-range training filter ────────────────────────────────────────
+        # Only train on bars where price is near a range boundary — matching
+        # the actual trading entry filter (d_max_atr=1.5). This focuses the
+        # model on near-breakout scenarios instead of general market prediction.
+        d_train  = cfg["trading"].get("d_max_atr", 1.5) * 3.0  # 3x entry filter
+        L_range  = cfg["labels"].get("L_range", 20)
+        rh_c_tr  = f"dist_rh_{L_range}"
+        rl_c_tr  = f"dist_rl_{L_range}"
+        if rh_c_tr in piece.columns and rl_c_tr in piece.columns:
+            near = (piece[rh_c_tr] <= d_train) | (piece[rl_c_tr] <= d_train)
+            piece = piece[near]
+
         print(f"  [{coin}] usable rows: {len(piece):,}")
         all_pieces.append(piece)
         all_label_dfs.append(df_lab.loc[piece.index])  # aligned fakeout cols
