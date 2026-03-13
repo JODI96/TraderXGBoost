@@ -61,6 +61,7 @@ class ExecutionEngine:
 
         self.bar_count = 0
         self.last_skip_reason = ""
+        self.last_skip_data:  dict = {}
 
     # ── Per-bar entry point ───────────────────────────────────────────────────
     def on_bar(
@@ -115,10 +116,14 @@ class ExecutionEngine:
         if not self.port.can_enter:
             if self.port.position is not None:
                 self.last_skip_reason = "in_pos"
+                self.last_skip_data   = {"status": "in_pos"}
             else:
                 self.last_skip_reason = f"cooldown={self.port._cooldown_rem}"
+                self.last_skip_data   = {"status": "cooldown",
+                                         "bars": self.port._cooldown_rem}
         elif atr <= 0:
             self.last_skip_reason = "atr=0"
+            self.last_skip_data   = {"status": "atr0"}
         else:
             sq_ok  = (not self.req_sq) or (squeeze == 1)
             ema_ok = ema9_21_diff >= self.min_ema9_21
@@ -128,7 +133,14 @@ class ExecutionEngine:
             rh_str = f"{dist_rh:.2f}" if not np.isnan(dist_rh) else "nan"
             rl_str = f"{dist_rl:.2f}" if not np.isnan(dist_rl) else "nan"
 
-            # Format: (LONG: p_up AND rh) OR (SHORT: p_dn AND rl)  AND sq AND ema
+            self.last_skip_data = {
+                "status":   "eval",
+                "p_up":     p_up,    "p_up_ok":  p_up   >= self.T_up,
+                "rh":       rh_str,  "rh_ok":    rh_ok,
+                "p_dn":     p_down,  "p_dn_ok":  p_down >= self.T_down,
+                "rl":       rl_str,  "rl_ok":    rl_ok,
+                "sq_ok":    sq_ok,   "ema_ok":   ema_ok,
+            }
             _Y = lambda v: "(Y)" if v else "(N)"
             self.last_skip_reason = (
                 f"[(p_up={p_up:.3f} {_Y(p_up>=self.T_up)} AND rh={rh_str} {_Y(rh_ok)})"
