@@ -171,7 +171,7 @@ class BinancePortfolio:
         if not self.can_enter:
             return
 
-        notional = math.floor(self.capital) * pos_pct
+        notional = math.floor(self.capital * 0.95) * pos_pct  # use 95% of margin as safety buffer
         qty      = self._rq(notional / price)
 
         side       = "BUY"  if direction == 1 else "SELL"
