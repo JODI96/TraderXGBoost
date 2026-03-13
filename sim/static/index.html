@@ -236,6 +236,61 @@
     .td-win   { color: #00c087; }
     .td-loss  { color: #ff5050; }
     .tv-lightweight-charts a { display: none !important; }
+
+    /* ── Mobile (≤ 640px) ────────────────────────────────────────────────────── */
+    @media (max-width: 640px) {
+      body { font-size: 11px; }
+
+      #header {
+        height: auto;
+        min-height: 44px;
+        flex-wrap: wrap;
+        padding: 5px 10px;
+        gap: 6px;
+      }
+      #hdr-datetime {
+        position: static;
+        transform: none;
+        order: 10;
+        width: 100%;
+        text-align: left;
+        font-size: 10px;
+        padding-bottom: 2px;
+      }
+      #sym        { font-size: 13px; }
+      #price-hdr  { font-size: 16px; min-width: 80px; }
+      #ws-label   { display: none; }
+      #pause-btn, #vp-btn {
+        padding: 2px 8px; font-size: 10px; min-width: 52px;
+      }
+
+      /* Shrink volume sub-chart, hide CVD to give main chart more room */
+      .sub-chart-wrap          { height: 55px; }
+      .sub-chart-wrap:last-of-type { display: none; }
+
+      #replay-bar  { flex-wrap: wrap; gap: 4px; font-size: 10px; }
+      #replay-date { min-width: 110px; }
+
+      #bottom { height: 175px; }
+
+      #stats-row { gap: 8px; padding: 4px 10px; }
+      .s         { min-width: 56px; }
+      .s-lbl     { font-size: 8px; }
+      .s-val     { font-size: 11px; }
+
+      #prob-row  { padding: 3px 10px; gap: 5px; }
+      .pb-lbl    { font-size: 10px; width: 32px; }
+      .pb-pct    { font-size: 10px; width: 34px; }
+
+      #log-scroll { overflow-x: auto; }
+      table       { font-size: 10px; min-width: 420px; }
+      thead th    { padding: 2px 5px; font-size: 9px; }
+      tbody td    { padding: 2px 5px; }
+
+      #replay-done-banner { padding: 14px 18px; font-size: 12px; width: 90vw; }
+      #replay-done-banner h3 { font-size: 14px; }
+      #replay-done-banner .stat-line { gap: 12px; }
+    }
   </style>
 </head>
 <body>
