@@ -25,24 +25,25 @@ import data as data_mod
 import features as feat_mod
 from backtest import run_backtest
 
-BASE      = Path(__file__).parent
-MAX_BARS  = 5000
+BASE = Path(__file__).parent
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data",     required=True)
-    parser.add_argument("--max-bars", type=int, default=MAX_BARS)
+    parser.add_argument("--max-bars", type=int, default=0, help="0 = use all bars")
     parser.add_argument("--out",      default="sim/static/replay_data.json")
     args = parser.parse_args()
 
     with open(BASE / "config.yaml") as f:
         cfg = yaml.safe_load(f)
 
+    init_cap = float(cfg.get("trading", {}).get("initial_capital", 1000.0))
+
     # 1. Load data
     print("Loading data …")
     df = data_mod.load_csv(str(BASE / args.data))
-    if len(df) > args.max_bars:
+    if args.max_bars and len(df) > args.max_bars:
         df = df.iloc[-args.max_bars:].copy()
         print(f"Trimmed to last {args.max_bars} bars")
 
@@ -69,107 +70,111 @@ def main() -> None:
     trades_df, equity_curve, report = run_backtest(df_feat, probs, cfg)
     print(f"{len(trades_df)} trades found.")
 
-    # 5. Index trades by timestamp
-    def _col(frame, *names):
-        return next((c for c in names if c in frame.columns), None)
-
-    entry_col  = _col(trades_df, "entry_time",  "open_time")
-    exit_col   = _col(trades_df, "exit_time",   "close_time")
-    dir_col    = _col(trades_df, "side",         "direction")
-    eprice_col = _col(trades_df, "entry_price",  "entry")
-    pnl_col    = _col(trades_df, "pnl_pct",      "pnl", "return")
-    sl_col     = _col(trades_df, "sl")
-    tp_col     = _col(trades_df, "tp")
-    reason_col = _col(trades_df, "reason",       "exit_reason")
-
+    # 5. Index trades by timestamp (exact pandas Timestamp keys)
     by_entry: dict = {}
     by_exit:  dict = {}
     if not trades_df.empty:
-        if entry_col:
-            for _, t in trades_df.iterrows():
-                by_entry[str(pd.Timestamp(t[entry_col]))] = t.to_dict()
-        if exit_col:
-            for _, t in trades_df.iterrows():
-                by_exit[str(pd.Timestamp(t[exit_col]))] = t.to_dict()
+        for _, t in trades_df.iterrows():
+            by_entry[t["entry_ts"]] = t
+            by_exit[t["exit_ts"]]   = t
 
     # 6. Build event stream
     print("Building event stream …")
-    init_cap = float(cfg.get("backtest", {}).get("initial_capital", 10.0))
     balance  = init_cap
     n_trades = n_wins = 0
     open_t   = None
     events: list[dict] = []
-
-    events.append({"type": "replay_info", "ts": int(df_feat.index[0].timestamp() * 1000), "pct": 0})
-
     n_bars = len(df_feat)
+
+    events.append({
+        "type": "replay_info",
+        "ts":   int(df_feat.index[0].timestamp() * 1000),
+        "pct":  0,
+    })
+
     for i, (ts, row) in enumerate(df_feat.iterrows()):
         ts_ms  = int(ts.timestamp() * 1000)
-        ts_str = str(ts)
         p_row  = probs[i] if i < len(probs) else np.zeros(n_cls)
         p_up   = float(p_row[2]) if len(p_row) > 2 else 0.0
         p_down = float(p_row[0]) if len(p_row) > 0 else 0.0
 
-        if ts_str in by_entry:
-            t = by_entry[ts_str]
+        # trade open
+        if ts in by_entry:
+            t      = by_entry[ts]
             open_t = t
             events.append({
-                "type":      "trade_open", "ts": ts_ms,
-                "direction": str(t.get(dir_col,    "LONG")),
+                "type":      "trade_open",
+                "ts":        ts_ms,
+                "direction": str(t["direction"]),
                 "p_up":      round(p_up,   4),
                 "p_down":    round(p_down, 4),
-                "price":     float(row["close"]),
-                "sl":        float(t[sl_col]) if sl_col and sl_col in t else round(float(row["close"]) * 0.9985, 2),
-                "tp":        float(t[tp_col]) if tp_col and tp_col in t else round(float(row["close"]) * 1.0045, 2),
+                "price":     round(float(t["entry_price"]), 2),
+                "sl":        round(float(t["entry_price"]) * (1 - 0.0015 if t["direction"] == "LONG" else 1 + 0.0015), 2),
+                "tp":        round(float(t["entry_price"]) * (1 + 0.0045 if t["direction"] == "LONG" else 1 - 0.0045), 2),
             })
 
-        if ts_str in by_exit:
-            t   = by_exit[ts_str]
-            pnl = float(t[pnl_col]) if pnl_col and pnl_col in t else 0.0
-            balance *= (1.0 + pnl)
+        # trade close
+        if ts in by_exit:
+            t        = by_exit[ts]
+            net_pnl  = float(t["net_pnl"])
+            balance += net_pnl
             n_trades += 1
-            if pnl > 0:
+            if net_pnl > 0:
                 n_wins += 1
             open_t = None
             events.append({
-                "type":        "trade_close", "ts": ts_ms,
-                "net_pnl":     round(pnl * balance, 6),
-                "direction":   str(t.get(dir_col,    "LONG")),
-                "entry_price": float(t[eprice_col]) if eprice_col and eprice_col in t else float(row["open"]),
-                "exit_price":  float(row["close"]),
-                "reason":      str(t.get(reason_col, "TP/SL")),
+                "type":        "trade_close",
+                "ts":          ts_ms,
+                "net_pnl":     round(net_pnl, 2),
+                "direction":   str(t["direction"]),
+                "entry_price": round(float(t["entry_price"]), 2),
+                "exit_price":  round(float(t["exit_price"]),  2),
+                "reason":      str(t["exit_reason"]),
+                "balance":     round(balance, 2),
+                "win_rate":    round(n_wins / n_trades * 100, 1) if n_trades else 0,
             })
 
-        eq_val = float(equity_curve[i]) if i < len(equity_curve) else balance
+        # candle
         events.append({
-            "type": "candle", "ts": ts_ms,
-            "open":    float(row["open"]),  "high":    float(row["high"]),
-            "low":     float(row["low"]),   "close":   float(row["close"]),
+            "type":    "candle",
+            "ts":      ts_ms,
+            "open":    float(row["open"]),
+            "high":    float(row["high"]),
+            "low":     float(row["low"]),
+            "close":   float(row["close"]),
             "volume":  float(row["volume"]),
             "buy_vol": float(row["taker_buy_vol"]) if "taker_buy_vol" in row else float(row["volume"]) * 0.5,
         })
 
+        # stats
+        eq_val = float(equity_curve[i]) if i < len(equity_curve) else balance
         events.append({
-            "type": "stats", "ts": ts_ms,
-            "balance":   round(balance, 4),
-            "vwap":      float(row["vwap"])      if "vwap"      in row else float(row["close"]),
-            "rel_vol":   float(row["rel_vol"])   if "rel_vol"   in row else 1.0,
-            "buy_ratio": float(row["buy_ratio"]) if "buy_ratio" in row else 0.5,
-            "equity":    round(eq_val, 4),
-            "n_trades":  n_trades,
-            "win_rate":  round(n_wins / n_trades if n_trades else 0, 3),
-            "position":  str(open_t.get(dir_col, "LONG")) if open_t else None,
-            "unreal":    0.0,
-            "entry":     float(open_t[eprice_col]) if open_t and eprice_col and eprice_col in open_t else None,
-            "sl":        float(open_t[sl_col])     if open_t and sl_col     and sl_col     in open_t else None,
-            "tp":        float(open_t[tp_col])     if open_t and tp_col     and tp_col     in open_t else None,
-            "p_up":  round(p_up,   4),
-            "p_down": round(p_down, 4),
+            "type":     "stats",
+            "ts":       ts_ms,
+            "balance":  round(balance, 2),
+            "equity":   round(eq_val,  2),
+            "vwap":     round(float(row["vwap"]),             4) if "vwap"             in row else float(row["close"]),
+            "rel_vol":  round(float(row["rel_vol"]),          4) if "rel_vol"          in row else 1.0,
+            "buy_ratio":round(float(row["taker_buy_ratio"]),  4) if "taker_buy_ratio"  in row else 0.5,
+            "n_trades": n_trades,
+            "win_rate": round(n_wins / n_trades * 100, 1) if n_trades else 0.0,
+            "position": str(open_t["direction"]) if open_t is not None else None,
+            "unreal":   0.0,
+            "entry":    round(float(open_t["entry_price"]), 2) if open_t is not None else None,
+            "sl":       round(float(open_t["entry_price"]) * (1 - 0.0015 if open_t["direction"] == "LONG" else 1 + 0.0015), 2) if open_t is not None else None,
+            "tp":       round(float(open_t["entry_price"]) * (1 + 0.0045 if open_t["direction"] == "LONG" else 1 - 0.0045), 2) if open_t is not None else None,
+            "p_up":     round(p_up,   4),
+            "p_down":   round(p_down, 4),
         })
 
         if i % 100 == 0:
-            events.append({"type": "replay_info", "ts": ts_ms, "pct": round(i / n_bars * 100, 1)})
+            events.append({
+                "type": "replay_info",
+                "ts":   ts_ms,
+                "pct":  round(i / n_bars * 100, 1),
+            })
 
+    # done
     final_eq  = float(equity_curve[-1]) if len(equity_curve) else balance
     total_ret = (final_eq / init_cap - 1.0) if init_cap else 0.0
     events.append({
@@ -177,11 +182,11 @@ def main() -> None:
         "summary": {
             "n_trades":         len(trades_df),
             "win_rate_pct":     round(n_wins / max(n_trades, 1) * 100, 1),
-            "net_pnl":          round(final_eq - init_cap, 4),
+            "net_pnl":          round(final_eq - init_cap, 2),
             "total_return_pct": round(total_ret * 100, 2),
             "max_drawdown_pct": round(float(report.get("max_drawdown", report.get("max_dd", 0))) * 100, 2),
             "profit_factor":    round(float(report.get("profit_factor", 0)), 2),
-            "final_capital":    round(final_eq, 4),
+            "final_capital":    round(final_eq, 2),
         },
     })
 
