@@ -2,6 +2,7 @@
 render_sim.py – Render-compatible replay server (JSON-only, no ML libs).
 
 Reads pre-exported replay_data.json and streams events via WebSocket.
+Handles pause/resume commands from the browser.
 Memory usage: ~50MB (just aiohttp + json).
 
 Start command:
@@ -10,12 +11,13 @@ Start command:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
 from pathlib import Path
 
-from aiohttp import web
+from aiohttp import web, WSMsgType
 
 BASE       = Path(__file__).parent
 STATIC_DIR = BASE / "sim" / "static"
@@ -44,8 +46,6 @@ async def handle_static(request: web.Request) -> web.Response:
 
 
 async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
-    import asyncio
-
     ws = web.WebSocketResponse()
     await ws.prepare(request)
 
@@ -54,38 +54,64 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
 
     events = data["events"]
     delay  = 1.0 / SPEED if SPEED > 0 else 0.0
+    paused = False
 
-    # Group events per bar: send all events for a bar, then sleep once
-    buffer: list[dict] = []
-    current_ts: int | None = None
+    # ── Receive pause/resume commands concurrently ────────────────────────────
+    async def _recv() -> None:
+        nonlocal paused
+        async for msg in ws:
+            if msg.type == WSMsgType.TEXT:
+                try:
+                    cmd = json.loads(msg.data).get("cmd", "")
+                    if cmd == "pause":
+                        paused = True
+                    elif cmd == "resume":
+                        paused = False
+                except Exception:
+                    pass
+            elif msg.type in (WSMsgType.CLOSE, WSMsgType.ERROR):
+                break
 
-    async def flush(ts: int) -> None:
-        for ev in buffer:
+    recv_task = asyncio.create_task(_recv())
+
+    try:
+        current_ts: int | None = None
+        buffer: list[dict] = []
+
+        async def flush() -> None:
+            for ev in buffer:
+                if ws.closed:
+                    return
+                # Wait while paused
+                while paused and not ws.closed:
+                    await asyncio.sleep(0.05)
+                await ws.send_str(json.dumps(ev, separators=(",", ":")))
+            buffer.clear()
+            if delay > 0 and not ws.closed:
+                while paused and not ws.closed:
+                    await asyncio.sleep(0.05)
+                await asyncio.sleep(delay)
+
+        for ev in events:
             if ws.closed:
-                return
-            await ws.send_str(json.dumps(ev, separators=(",", ":")))
-        buffer.clear()
-        if delay > 0 and ts is not None:
-            await asyncio.sleep(delay)
+                break
 
-    for ev in events:
-        if ws.closed:
-            break
+            ts = ev.get("ts")
 
-        ts = ev.get("ts")
+            if ev["type"] in ("candle", "stats") and ts != current_ts and current_ts is not None:
+                await flush()
+                current_ts = ts
 
-        # Flush previous bar when timestamp changes for candle/stats
-        if ev["type"] in ("candle", "stats") and ts != current_ts and current_ts is not None:
-            await flush(current_ts)
-            current_ts = ts
+            if current_ts is None and ts is not None:
+                current_ts = ts
 
-        if current_ts is None and ts is not None:
-            current_ts = ts
+            buffer.append(ev)
 
-        buffer.append(ev)
+        if buffer and not ws.closed:
+            await flush()
 
-    if buffer and not ws.closed:
-        await flush(current_ts)
+    finally:
+        recv_task.cancel()
 
     return ws
 
