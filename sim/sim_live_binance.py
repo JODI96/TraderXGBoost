@@ -247,9 +247,9 @@ async def run_live(cfg: dict, symbol: str) -> None:
                     d        = event.get("direction", "")
                     d_col    = C.GREEN if d == "LONG" else C.RED
                     d_sym    = "^" if d == "LONG" else "v"
-                    _etop = _clr("+" + "-" * 60 + "+", d_col, C.BOLD)
-                    _ebot = _clr("+" + "-" * 60 + "+", d_col, C.BOLD)
-                    _el   = _clr("|", d_col, C.BOLD)
+                    _etop = _clr("\u250c" + "\u2500" * 60 + "\u2510", d_col, C.BOLD)
+                    _ebot = _clr("\u2514" + "\u2500" * 60 + "\u2518", d_col, C.BOLD)
+                    _el   = _clr("\u2502", d_col, C.BOLD)
                     print(f"\n {_etop}")
                     print(f" {_el}  {_clr(d_sym + ' ENTRY  ' + d, d_col, C.BOLD)}"
                           f"  @  {_clr(f'{pos.entry_price:,.2f}', C.WHITE, C.BOLD)}"
@@ -273,9 +273,9 @@ async def run_live(cfg: dict, symbol: str) -> None:
                     rsn_sym  = "+" if reason == "TP" else ("-" if reason == "SL" else "~")
                     wr_col   = C.GREEN if nt and wins/nt >= 0.6 else C.YELLOW
                     pnl_sign = "+" if pnl >= 0 else ""
-                    _xtop = _clr("+" + "-" * 60 + "+", rsn_col, C.BOLD)
-                    _xbot = _clr("+" + "-" * 60 + "+", rsn_col, C.BOLD)
-                    _xl   = _clr("|", rsn_col, C.BOLD)
+                    _xtop = _clr("\u250c" + "\u2500" * 60 + "\u2510", rsn_col, C.BOLD)
+                    _xbot = _clr("\u2514" + "\u2500" * 60 + "\u2518", rsn_col, C.BOLD)
+                    _xl   = _clr("\u2502", rsn_col, C.BOLD)
                     print(f"\n {_xtop}")
                     print(f" {_xl}  {_clr(rsn_sym + ' EXIT  ' + reason, rsn_col, C.BOLD)}"
                           f"  @  {_clr(f'{exit_p:,.2f}', C.WHITE, C.BOLD)}"
@@ -332,6 +332,12 @@ async def run_live(cfg: dict, symbol: str) -> None:
 def main() -> None:
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        # Enable ANSI colour processing on Windows 10+
+        os.system("")
+        # Force UTF-8 output so box-drawing chars render correctly
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8",
+                                      errors="replace", line_buffering=True)
 
     parser = argparse.ArgumentParser(description="Live Binance paper-trading sim")
     parser.add_argument("--symbol", default=None)
