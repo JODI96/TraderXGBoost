@@ -1,11 +1,11 @@
 services:
   - type: web
-    name: traderxgboost-api
+    name: traderxgboost
     env: python
-    region: frankfurt         # closest to Switzerland
+    region: frankfurt
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+    startCommand: python render_sim.py --data Data/BTCUSDT/monthly/2026-01_1m.csv --speed 30
     envVars:
       - key: PYTHON_VERSION
         value: 3.10.0
