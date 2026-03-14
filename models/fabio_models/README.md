@@ -19,7 +19,7 @@ trading:
 ```
 
 ## Backtest Ergebnisse
-- Return: +42.4%
+- Return: +42.4% (10x Leverage) / +3.72% (1x)
 - Trades: 29
 - Win Rate: 62.1%
 - Profit Factor: 2.69
