@@ -211,8 +211,8 @@ trading:
   require_squeeze: false  # if true, only enter when squeeze_flag=1
                            # set true for higher quality entries at cost of fewer trades
 
-  sl_pct:          0.0015  # stop-loss as fraction of price (must match labels.sl_pct)
-  tp_pct:          0.0045  # take-profit as fraction of price (must match labels.tp_pct)
+  sl_pct:          0.002  # stop-loss as fraction of price (must match labels.sl_pct)
+  tp_pct:          0.006  # take-profit as fraction of price (must match labels.tp_pct)
 
   sl_atr:          2      # (ATR-mode fallback) stop-loss in ATR units
   tp_atr:          6      # (ATR-mode fallback) sl_atr * rr_ratio = 2 * 3
