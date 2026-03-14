@@ -27,6 +27,7 @@ build/
 
 # ── Virtual environment ───────────────────────────────────────
 trader2/
+trader_venv/
 venv/
 .venv/
 env/
@@ -51,3 +52,4 @@ Thumbs.db
 .idea/
 .vscode/
 *.log
+pipeline_results/*.db

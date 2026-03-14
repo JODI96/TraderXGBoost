@@ -1,257 +1,122 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# BTC 1-min Scalping – Breakout Anticipation System
-# All durations in candle counts (1 candle = 1 minute) unless noted.
-# ─────────────────────────────────────────────────────────────────────────────
-
 data:
-  base_dir: "Data/BTCUSDT/full_year"  # single-coin path (backtest/eval/live)
-  data_root: "Data"                   # root for multi-coin training
-  symbol: "BTCUSDT"
-  primary_tf: "1m"
-  years: [2022, 2023, 2024, 2025]          # years to load; more years = better model but slower training
-  coins:                              # coins used for training; more coins = more data diversity
-    - BTCUSDT
-    - ETHUSDT
-    - SOLUSDT
-#    - BNBUSDT
-#    - XRPUSDT
-#    - ADAUSDT
-#    - DOGEUSDT
-#    - DOTUSDT
-#    - HBARUSDT
-
-# ── Label Design ──────────────────────────────────────────────────────────────
+  base_dir: Data/BTCUSDT/full_year
+  data_root: Data
+  symbol: BTCUSDT
+  primary_tf: 1m
+  years:
+  - 2022
+  - 2023
+  - 2024
+  - 2025
+  coins:
+  - BTCUSDT
+  - ETHUSDT
+  - SOLUSDT
 labels:
-  L_range:   20        # bars to look back for range high/low              [range: 5–60]
-                       # 20 bars = 20-min consolidation; stable range, ~3% label rate
-                       # increase → wider/more stable range; decrease → tighter/noisier range
-
-  H_horizon: 20        # bars to look ahead for the breakout target         [range: 5-60]
-                       # must equal trading.time_stop
-                       # 20 bars = 20-minute trade window on 1m data
-                       # increase → more time to hit TP, more UP/DOWN labels, but trades take longer
-                       # decrease → fewer labels, model sees less, faster trades
-
-  k_atr:     5         # how far price must move past range boundary (in ATR) [range: 1–50]
-                       # 5 = clean breakout well past range boundary
-                       # increase → fewer but cleaner breakout labels
-                       # decrease → more labels but more false breakouts
-
-  L_atr:     7         # EWM span for ATR used in label barrier calculation  [range: 1–14]
-                       # increase → smoother/slower ATR; decrease → faster/noisier ATR
-
-  # Barrier label: bar is labeled UP/DOWN only if price hits TP before SL within H_horizon bars.
-  # Fixed-percentage mode (active when sl_pct + tp_pct are present):
-  #   TP/SL are a fixed % of entry price — fee overhead stays low even in low-ATR squeezes.
-  # ATR-mode fallback (used if sl_pct/tp_pct are absent):
-  #   sl_atr and rr_ratio must match trading.sl_atr and trading.tp_atr = sl_atr * rr_ratio.
-
-  sl_pct:    0.0015    # stop-loss as fraction of price (0.15%)
-                       # at BTC $95k: SL = $142; fee is only 9% of gross TP
-                       # increase → wider SL, higher label TP win rate, bigger losses if wrong
-                       # decrease → tighter SL, more NO_BREAK labels
-
-  tp_pct:    0.0045    # take-profit as fraction of price (0.45%)  -> 1:3 RR with sl_pct=0.0015
-                       # at BTC $95k: TP = $427; net TP ~$38 (fee is 9% of gross)
-                       # increase → bigger TP, fewer labels hit, but each win is worth more
-                       # decrease → easier to hit TP, more UP/DOWN labels but smaller net wins
-
-  sl_atr:    2         # (ATR-mode fallback) stop-loss in ATR units
-  rr_ratio:  3         # (ATR-mode fallback) TP = sl_atr * rr_ratio * ATR
-
-  # Round-trip trading costs (as fractions). Used to filter unprofitable labels.
-  maker_fee:  0.0002   # fee per leg for limit orders (0.02%)               [range: 0.0001–0.001]
-  taker_fee:  0.0000   # fee per leg for market orders                      [range: 0.0–0.001]
-  slippage:   0.0000   # expected slippage per leg                          [range: 0.0–0.001]
-  spread:     0.0000   # bid-ask spread cost                                [range: 0.0–0.001]
-
-  # 0 = DOWN_BREAK_SOON  1 = NO_BREAK  2 = UP_BREAK_SOON
+  L_range: 20
+  H_horizon: 15
+  k_atr: 5
+  L_atr: 7
+  sl_pct: 0.0015
+  tp_pct: 0.0045
+  sl_atr: 2
+  rr_ratio: 3
+  maker_fee: 0.0002
+  taker_fee: 0.0
+  slippage: 0.0
+  spread: 0.0
   n_classes: 3
-
-# ── Feature Params ────────────────────────────────────────────────────────────
 features:
-  atr_short:        7      # EWM span for fast ATR                          [range: 3–14]
-                           # increase → smoother but slower to react; decrease → noisier but faster
-
-  atr_long:         50     # EWM span for slow ATR (volatility regime baseline) [range: 20–100]
-                           # increase → very smooth long-term volatility measure
-                           # decrease → closer to atr_short, less contrast between the two
-
-  bb_period:        20     # Bollinger Band lookback period                  [range: 10–50]
-                           # increase → wider, smoother bands; decrease → tighter, more reactive
-
-  bb_std:           2.0    # Bollinger Band standard deviation multiplier    [range: 1.5–3.0]
-                           # increase → bands wider, fewer squeeze signals; decrease → more squeezes
-
-  keltner_mult:     1.5    # Keltner Channel ATR multiplier                  [range: 1.0–2.5]
-                           # squeeze = BB inside KC
-                           # increase → easier to trigger squeeze; decrease → harder to trigger
-
-  ema_periods:      [9, 21, 50, 200]  # EMA lengths for slow trend features; add/remove as needed
-                                      # fast EMAs (3, 5) are always computed in the F2 momentum block
-                                      # typical values: 5, 9, 21, 50, 100, 200
-
-  cvd_window:       10     # fast rolling window for cumulative volume delta  [range: 5–60]
-                           # increase → slower CVD signal; decrease → noisier but faster
-
-  cvd_window_slow:  30     # slow CVD window for divergence features          [range: 30–200]
-                           # increase → very smooth baseline; decrease → less contrast with fast CVD
-
-  vwap_window:      60     # rolling VWAP window in bars                     [range: 30–390]
-                           # 390 = full NY session; 60 = 1 hour; shorter = more responsive
-
-  range_lookbacks:  [8, 20, 60]   # lookback periods for range high/low features [each: 5–500]
-                               # 8 = matches L_range for dist_rh_8 entry filter
-                               # add longer values for multi-timeframe range awareness
-
-  vol_lookback:     20     # window for relative volume baseline              [range: 10–100]
-                           # increase → compares to longer baseline; decrease → shorter baseline
-
-  # ── 30-minute trend filter ────────────────────────────────────────────────
-  trend30_window:       10     # bars for short-term trend detection          [range: 5–60]
-                               # 10 bars = 10 min on 1m data — faster regime detection
-                               # reduced from 30 to make model react quicker to trend changes
-
-  trend30_slope_thresh: 0.02   # min |normalised slope| to classify as trending [range: 0.001–0.01]
-                               # increase → stricter trending definition; decrease → more bars trend-labeled
-
-  trend30_range_thresh: 3.0    # max 30-bar range in ATR units for consolidation [range: 1.5–6.0]
-                               # increase → allows wider consolidation; decrease → only tight ranges qualify
-
-  # ── CVD candle strength ───────────────────────────────────────────────────
-  cvd_strength_window:  30     # rolling lookback for cvd_candle_pct percentile rank [range: 10–100]
-                               # increase → compares against longer history; decrease → more reactive
-
-  live_buffer:      80    # number of candles kept in memory for live inference [range: 80–500]
-                           # MUST be > min_warmup (= max(atr_long, max_range_lookback) + 10 = 70)
-                           # AND >= vwap_window for full VWAP history
-                           # 300 is safe; decrease only if memory is a concern (keep >= 80)
-
-# ── Training ──────────────────────────────────────────────────────────────────
+  atr_short: 7
+  atr_long: 50
+  bb_period: 20
+  bb_std: 2.0
+  keltner_mult: 1.5
+  ema_periods:
+  - 9
+  - 21
+  - 50
+  - 200
+  cvd_window: 10
+  cvd_window_slow: 30
+  vwap_window: 60
+  range_lookbacks:
+  - 8
+  - 20
+  - 60
+  vol_lookback: 20
+  trend30_window: 10
+  trend30_slope_thresh: 0.02
+  trend30_range_thresh: 3.0
+  cvd_strength_window: 30
+  live_buffer: 80
 training:
-  test_size:    0.20        # fraction of data held out as final test set    [range: 0.10–0.30]
-                            # increase → larger test, less training data; decrease → opposite
-
-  n_wf_splits:  5           # number of walk-forward CV folds                [range: 3–10]
-                            # increase → more robust evaluation but slower training
-                            # decrease → faster but less reliable CV estimate
-
-  gap_candles:  30          # bars removed between train and val             [range: >= H_horizon]
-                            # should be >= H_horizon to avoid future data leaking into training
-
-  break_weight: 10.0        # sample weight multiplier for UP/DOWN vs NO_BREAK [range: 2.0–50.0]
-                            # 10 = sweet spot for 3% label rate (Run 21 finding)
-                            # increase → model focuses more on breakouts (less false negatives)
-                            # decrease → model more conservative (fewer signals, fewer false positives)
-                            # if f1_UP/f1_DOWN = 0.0 after training, increase this significantly
-
+  test_size: 0.2
+  n_wf_splits: 5
+  gap_candles: 30
+  break_weight: 6.788237233472035
   xgb_params:
-    objective:          "multi:softprob"   # outputs probabilities for all 3 classes; do not change
-    num_class:          3                  # must match n_classes; do not change
-
-    n_estimators:       5000               # max number of trees              [range: 500–5000]
-                                           # increase if any fold hits the cap (early stopping doesn't fire)
-                                           # decrease to speed up training
-
-    learning_rate:      0.01              # step size per tree                [range: 0.005–0.1]
-                                           # lower = more careful, needs more n_estimators
-                                           # 0.01 + 2000 trees is a good pairing; 0.05 + 500 is faster
-
-    max_depth:          5                 # max depth of each tree            [range: 3–8]
-                                           # increase → more complex patterns but risks overfitting
-                                           # decrease → simpler model, less overfit, may underfit
-
-    min_child_weight:   10                # minimum sum of sample weights in a leaf [range: 1–200]
-                                           # increase → more conservative splits, ignores rare patterns
-                                           # decrease → allows learning rare breakout patterns (important!)
-                                           # too high (e.g. 200) = model cannot learn minority classes
-
-    subsample:          0.60              # fraction of training rows per tree [range: 0.4–1.0]
-                                           # decrease → more regularisation, slower convergence
-                                           # increase → faster but more overfit risk
-
-    colsample_bytree:   0.70              # fraction of features per tree     [range: 0.3–1.0]
-                                           # decrease → more feature diversity, less overfit
-                                           # increase → uses more features per tree
-
-    gamma:              1               # min loss reduction required to split [range: 0.0–5.0]
-                                           # increase → fewer splits, more conservative model
-                                           # decrease → more splits, learns finer patterns
-
-    reg_alpha:          1.0              # L1 regularisation (sparsity)      [range: 0.0–10.0]
-                                           # increase → zeroes out weak features
-    reg_lambda:         1.0               # L2 regularisation (smoothness)    [range: 0.1–10.0]
-                                           # increase → shrinks all feature weights
-
-    tree_method:        "hist"            # fast histogram-based training
-    device:             "cuda"            # use GPU (NVIDIA RTX 3080); remove if no GPU available
-    eval_metric:        "mlogloss"        # validation metric for early stopping; do not change
-    seed:               42                # random seed for reproducibility
-    verbosity:          0                 # 0=silent, 1=warnings, 2=info      [range: 0–2]
-
-  early_stopping_rounds: 100              # stop if no val improvement for N rounds [range: 20–200]
-                                          # increase → more patient, finds better solution
-                                          # decrease → faster training but may stop too early
-
-  artifacts_dir:         "models"        # folder where model, features, thresholds are saved
-
-# ── Trading Signal ────────────────────────────────────────────────────────────
+    objective: multi:softprob
+    num_class: 3
+    n_estimators: 4000
+    learning_rate: 0.008351704701582103
+    max_depth: 5
+    min_child_weight: 42
+    subsample: 0.5610870288630804
+    colsample_bytree: 0.6842050402315523
+    gamma: 1.197408601390586
+    reg_alpha: 0.5195096820819347
+    reg_lambda: 5.358447456840847
+    tree_method: hist
+    device: cuda
+    eval_metric: mlogloss
+    seed: 42
+    verbosity: 0
+  early_stopping_rounds: 100
+  artifacts_dir: models
 trading:
-  T_up:            0.67   # min model probability for UP_BREAK -> LONG entry  [range: 0.3-0.9]
-                           # increase → fewer but higher-confidence entries (better precision)
-                           # decrease → more entries but more false signals
-
-  T_down:          0.67   # min model probability for DOWN_BREAK → SHORT entry [range: 0.3–0.9]
-                           # same logic as T_up
-
-  d_max_atr:       1.5    # max distance from price to range boundary (ATR)  [range: 0.5–5.0]
-                           # only enter if price is close enough to the range edge
-                           # increase → enter even far from range; decrease → only near-boundary entries
-
-  require_squeeze: false  # if true, only enter when squeeze_flag=1
-                           # set true for higher quality entries at cost of fewer trades
-
-  sl_pct:          0.0015  # stop-loss as fraction of price (must match labels.sl_pct)
-  tp_pct:          0.0045  # take-profit as fraction of price (must match labels.tp_pct)
-
-  sl_atr:          2      # (ATR-mode fallback) stop-loss in ATR units
-  tp_atr:          6      # (ATR-mode fallback) sl_atr * rr_ratio = 2 * 3
-
-  time_stop:       30     # force-close trade after N bars                   [range: 5-60]
-                           # intentionally > H_horizon=20: extra 10 bars help good setups complete
-                           # empirical: ts=30 beats ts=20 at every threshold with H=20 labels
-
-  min_ema9_21_diff: -0.5  # min (EMA9-EMA21)/ATR to allow entry              [range: -2.0–1.0]
-                           # filters trades when short-term momentum is strongly bearish
-                           # -0.5 = EMA9 must be within 0.5 ATR below EMA21
-                           # 0.0  = EMA9 must be above EMA21 (bullish crossover only)
-                           # -999 = disabled
-
-  cooldown:        5      # bars to wait after a trade closes                [range: 0–60]
-                           # 5 bars = 5-minute cooldown between trades
-                           # decrease → more trades, can re-enter immediately
-
-  max_positions:   1      # maximum simultaneous open trades; keep at 1 for single-position mode
-  initial_capital: 1000.0  # starting capital in USD
-  position_size_pct: 10.0    # fraction of capital risked per trade           [range: 0.01–10.0]
-                             # 3.0 = 3x leverage; SL=-0.45% capital, TP=+1.35% capital per trade
-
-# ── Sweep (grid search over T and leverage) ───────────────────────────────────
+  T_up: 0.6
+  T_down: 0.58
+  d_max_atr: 1.5
+  require_squeeze: false
+  sl_pct: 0.0015
+  tp_pct: 0.0045
+  sl_atr: 2
+  tp_atr: 6
+  time_stop: 25
+  min_ema9_21_diff: -0.5
+  cooldown: 5
+  max_positions: 1
+  initial_capital: 1000.0
+  position_size_pct: 10.0
 sweep:
-  T_values:       [0.58, 0.60, 0.62, 0.64, 0.66, 0.67, 0.68, 0.69, 0.70]
-  leverages:      [1, 10.0, 20.0, 30.0, 50, 100, 150]
-  liq_threshold:  0.20     # liquidated when capital < 20% of initial
-  n_sims:         20000    # Monte Carlo simulations per scenario
-
-# ── Simulation ────────────────────────────────────────────────────────────────
+  T_values:
+  - 0.58
+  - 0.6
+  - 0.62
+  - 0.64
+  - 0.66
+  - 0.67
+  - 0.68
+  - 0.69
+  - 0.7
+  leverages:
+  - 1
+  - 10.0
+  - 20.0
+  - 30.0
+  - 50
+  - 100
+  - 150
+  liq_threshold: 0.2
+  n_sims: 20000
 simulation:
   replay:
-    data_file:         "Data/BTCUSDT/full_year/2025_1m.csv"  # CSV file used for replay sim
-    speed_multiplier:  0    # 0 = run as fast as possible; 1 = real-time; 60 = 1 bar per second
-    log_file:          "sim/logs/replay_log.jsonl"
+    data_file: Data/BTCUSDT/full_year/2025_1m.csv
+    speed_multiplier: 0
+    log_file: sim/logs/replay_log.jsonl
   live:
-    symbol:            "BTCUSDT"
-    interval:          "1m"
-    ws_url:            "wss://stream.binance.com:9443/ws"
-    log_file:          "sim/logs/live_log.jsonl"
-
+    symbol: BTCUSDT
+    interval: 1m
+    ws_url: wss://stream.binance.com:9443/ws
+    log_file: sim/logs/live_log.jsonl
