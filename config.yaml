@@ -14,7 +14,7 @@ data:
   - SOLUSDT
 labels:
   L_range: 20
-  H_horizon: 15
+  H_horizon: 20
   k_atr: 5
   L_atr: 7
   sl_pct: 0.0015
@@ -54,19 +54,19 @@ training:
   test_size: 0.2
   n_wf_splits: 5
   gap_candles: 30
-  break_weight: 6.788237233472035
+  break_weight: 10.0
   xgb_params:
     objective: multi:softprob
     num_class: 3
-    n_estimators: 4000
-    learning_rate: 0.008351704701582103
+    n_estimators: 5000
+    learning_rate: 0.01
     max_depth: 5
-    min_child_weight: 42
-    subsample: 0.5610870288630804
-    colsample_bytree: 0.6842050402315523
-    gamma: 1.197408601390586
-    reg_alpha: 0.5195096820819347
-    reg_lambda: 5.358447456840847
+    min_child_weight: 10
+    subsample: 0.6
+    colsample_bytree: 0.7
+    gamma: 1
+    reg_alpha: 1.0
+    reg_lambda: 1.0
     tree_method: hist
     device: cuda
     eval_metric: mlogloss
@@ -75,15 +75,15 @@ training:
   early_stopping_rounds: 100
   artifacts_dir: models
 trading:
-  T_up: 0.6
-  T_down: 0.58
+  T_up: 0.67
+  T_down: 0.67
   d_max_atr: 1.5
   require_squeeze: false
   sl_pct: 0.0015
   tp_pct: 0.0045
   sl_atr: 2
   tp_atr: 6
-  time_stop: 25
+  time_stop: 30
   min_ema9_21_diff: -0.5
   cooldown: 5
   max_positions: 1

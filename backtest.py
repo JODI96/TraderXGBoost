@@ -9,6 +9,8 @@ Usage
     python backtest.py                       # default: test split
     python backtest.py --year 2025           # specific year
     python backtest.py --T_up 0.60 --T_down 0.60
+    python backtest.py --model trial24       # use a saved Fabio model
+    python backtest.py --model jodi          # use Jodi's current model
 
 Outputs
 -------
@@ -22,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from pathlib import Path
 
 import matplotlib
@@ -35,6 +38,56 @@ import yaml
 import data as data_mod
 import features as feat_mod
 import labels as label_mod
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pre-configured model profiles for --model flag
+# Each profile specifies the model file and config overrides.
+# All models use the standard feature_columns.json / label_meta.json / thresholds.json.
+# ─────────────────────────────────────────────────────────────────────────────
+MODEL_PROFILES = {
+    "trial60": {
+        "model": "models/fabio_models/v2.1_trial60_PF7.05.json",
+        "desc": "PF 7.05, WR 83.3%, 6 Trades, DD -3.9%",
+        "config": {"T_up": 0.64, "T_down": 0.64, "sl_pct": 0.0015, "tp_pct": 0.0045,
+                   "time_stop": 30},
+        "labels": {"H_horizon": 20, "sl_pct": 0.0015, "tp_pct": 0.0045},
+    },
+    "trial51": {
+        "model": "models/fabio_models/v2.1_trial51_PF5.42.json",
+        "desc": "PF 5.42, WR 80.0%, 10 Trades, DD -3.7%",
+        "config": {"T_up": 0.60, "T_down": 0.58, "sl_pct": 0.0015, "tp_pct": 0.0045,
+                   "time_stop": 25},
+        "labels": {"H_horizon": 15, "sl_pct": 0.0015, "tp_pct": 0.0045},
+    },
+    "trial75": {
+        "model": "models/fabio_models/v2.1_trial75_PF3.63.json",
+        "desc": "PF 3.63, WR 70.0%, 20 Trades, DD -7.5%",
+        "config": {"T_up": 0.60, "T_down": 0.58, "sl_pct": 0.002, "tp_pct": 0.0045,
+                   "time_stop": 25},
+        "labels": {"H_horizon": 15, "sl_pct": 0.002, "tp_pct": 0.0045},
+    },
+    "trial33": {
+        "model": "models/fabio_models/v2.1_trial33_PF3.42.json",
+        "desc": "PF 3.42, WR 63.2%, 19 Trades, DD -5.9%",
+        "config": {"T_up": 0.60, "T_down": 0.58, "sl_pct": 0.0015, "tp_pct": 0.0045,
+                   "time_stop": 25},
+        "labels": {"H_horizon": 15, "sl_pct": 0.0015, "tp_pct": 0.0045},
+    },
+    "trial24": {
+        "model": "models/fabio_models/v2.1_trial24_PF2.69.json",
+        "desc": "PF 2.69, WR 62.1%, 29 Trades, DD -8.4%",
+        "config": {"T_up": 0.64, "T_down": 0.60, "sl_pct": 0.002, "tp_pct": 0.0045,
+                   "time_stop": 30},
+        "labels": {"H_horizon": 20, "sl_pct": 0.002, "tp_pct": 0.0045},
+    },
+    "jodi": {
+        "model": "models/xgb_model.json",
+        "desc": "Jodi's current model (as-is from config)",
+        "config": {},
+        "labels": {},
+    },
+}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -342,6 +395,9 @@ def _plot_equity(equity: np.ndarray, trades: pd.DataFrame, out_path: str) -> Non
 # ─────────────────────────────────────────────────────────────────────────────
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--model",     default=None,
+                        help="Model profile name (e.g. trial24, trial60, jodi). "
+                             "Use --model list to see all available profiles.")
     parser.add_argument("--year",      type=int,   default=None)
     parser.add_argument("--T_up",      type=float, default=None)
     parser.add_argument("--T_down",    type=float, default=None)
@@ -355,8 +411,48 @@ def main() -> None:
     parser.add_argument("--artifacts", default="models")
     args = parser.parse_args()
 
+    # ── List available model profiles ─────────────────────────────────────────
+    if args.model == "list":
+        print("\nAvailable model profiles (use with --model <name>):\n")
+        for name, prof in MODEL_PROFILES.items():
+            print(f"  {name:<12} {prof['desc']}")
+        print()
+        return
+
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
+
+    # ── Apply model profile if specified ──────────────────────────────────────
+    if args.model:
+        profile = MODEL_PROFILES.get(args.model)
+        if profile is None:
+            print(f"  ERROR: Unknown model '{args.model}'.")
+            print(f"  Available: {', '.join(MODEL_PROFILES.keys())}")
+            print(f"  Use --model list to see details.")
+            return
+
+        print(f"  Using model profile: {args.model}")
+        print(f"  {profile['desc']}")
+
+        # Copy model file to models/xgb_model.json so _load_artifacts picks it up
+        model_src = Path(profile["model"])
+        if not model_src.exists():
+            print(f"  ERROR: Model file not found: {model_src}")
+            return
+        model_dst = Path(args.artifacts) / "xgb_model.json"
+        if str(model_src) != str(model_dst):
+            shutil.copy2(model_src, model_dst)
+            print(f"  Copied {model_src.name} -> {model_dst}")
+
+        # Apply config overrides
+        for k, v in profile.get("config", {}).items():
+            cfg["trading"][k] = v
+        for k, v in profile.get("labels", {}).items():
+            cfg["labels"][k] = v
+
+        tc = profile.get("config", {})
+        print(f"  Config: T_up={tc.get('T_up', '-')}, T_down={tc.get('T_down', '-')}, "
+              f"sl={tc.get('sl_pct', '-')}, tp={tc.get('tp_pct', '-')}")
 
     # ── Load artifacts ────────────────────────────────────────────────────────
     print("Loading model ...")

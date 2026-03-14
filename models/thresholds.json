@@ -1,6 +1,6 @@
 {
   "T_up": 0.6,
-  "T_down": 0.58,
+  "T_down": 0.6,
   "d_max_atr": 1.5,
   "classes": {
     "0": "DOWN_BREAK_SOON",
