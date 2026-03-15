@@ -257,13 +257,13 @@ def _print_dashboard(ts, price: float, prev_price: float,
     out.append(_L(
         _sp(4), _S("P(UP)", _GRY), _sp(3), _S(up_pct, _GRN + _BD), _sp(3),
         _mkbar(p_up,   BAR_W, 82,  threshold=T_up),
-        _sp(2), _lbl("rh", rh_ok), _sp(1), _lbl("sq", sq_ok), _sp(1), _lbl("ema", ema_ok),
+        _sp(2), _lbl("rh",  rh_ok),  _sp(2), _lbl("sq", sq_ok), _sp(1), _lbl("ema", ema_ok),
         _sp(2), _S("NEXT ", _GRY), _S(timer_s, _CYN + _BD),
     ))
     out.append(_L(
         _sp(4), _S("P(DN)", _GRY), _sp(3), _S(dn_pct, _RED + _BD), _sp(3),
         _mkbar(p_down, BAR_W, 196, threshold=T_down),
-        _sp(2), _lbl("rl", rl_ok),
+        _sp(2), _lbl("rl",  rl_ok),  _sp(2), _lbl("sq", sq_ok), _sp(1), _lbl("ema", ema_ok),
     ))
     out.append(DIV)
 
@@ -601,9 +601,10 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
     def _redraw():
         if _dash["ts"] is None:
             return
-        pos     = portfolio.position
-        balance = portfolio.capital
-        equity  = portfolio.mark_to_market(_dash["price"])
+        pos        = portfolio.position
+        balance    = portfolio.capital
+        live_price = _price_ref[0] if _price_ref[0] > 0 else _dash["price"]
+        equity     = portfolio.mark_to_market(live_price)
         if pos is not None:
             status = "LONG" if pos.direction == 1 else "SHORT"
             skip   = "in_pos"
@@ -618,7 +619,7 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
         wins    = sum(1 for t in portfolio.trade_log if t.net_pnl > 0)
         net_pnl = sum(t.net_pnl for t in portfolio.trade_log)
         _print_dashboard(
-            _dash["ts"], _dash["price"], _dash["prev_price"],
+            _dash["ts"], live_price, _dash["prev_price"],
             _dash["p_up"], _dash["p_down"],
             balance, equity, pos, status,
             nt, wins, net_pnl,
@@ -638,6 +639,14 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
             except asyncio.CancelledError:
                 return
             if _price_ref[0] > 0:
+                # Fetch live mark price so dashboard refreshes between bars
+                try:
+                    tk = portfolio._client.futures_mark_price(symbol=portfolio.symbol)
+                    mp = float(tk.get("markPrice") or tk.get("price") or 0)
+                    if mp > 0:
+                        _price_ref[0] = mp
+                except Exception:
+                    pass
                 try:
                     portfolio.handle_pending_fill_immediate(
                         sl_pct=tc.get("sl_pct", 0.002),
