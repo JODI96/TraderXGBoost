@@ -185,7 +185,7 @@ def _draw_chart(candles: list, width: int, height: int,
     # 2 chars per candle: body char + dim separator
     n_candles = min(width // 2, len(all_c))
     cs        = all_c[-n_candles:]
-    SEP       = f"{_DGR}│{_R}"     # dim separator between candles
+    SEP       = " "                 # small space between candles
 
     lo  = min(c["low"]  for c in cs)
     hi  = max(c["high"] for c in cs)
