@@ -95,6 +95,7 @@ _GRY = _c(244)   # label grey
 _DGR = _c(238)   # dim grey
 _CYN = _c(87)    # light cyan
 _ORG = _c(208)   # orange
+_PRP = _c(141)   # purple (OR operator)
 
 _W = 72   # inner width (between ║ chars)
 
@@ -127,6 +128,35 @@ def _mkbar(val: float, width: int, on: int, off: int = 238) -> _S:
     return _S(ansi, vw=width)
 
 
+def _sig_segs(sd: dict) -> list:
+    """Build colored _S segments for the eval signal condition line."""
+    if not sd or sd.get("status") != "eval":
+        return []
+
+    def _ok(v: bool) -> _S:
+        return _S("✓", _GRN + _BD) if v else _S("✗", _RED + _BD)
+
+    _AND = _S(" & ", _ORG + _BD)
+    _OR  = _S(" | ", _PRP + _BD)
+    _LB  = _S("[", _CYN  + _BD)   # outer bracket
+    _RB  = _S("]", _CYN  + _BD)
+    _LP  = _S("(", _DGR)          # inner paren
+    _RP  = _S(")", _DGR)
+
+    return [
+        _sp(1), _LB,
+        _LP,
+        _S(f"p_up={sd['p_up']:.3f} ", _WHT), _ok(sd["p_up_ok"]), _AND,
+        _S(f"rh={sd['rh']} ",         _WHT), _ok(sd["rh_ok"]),
+        _RP, _OR, _LP,
+        _S(f"p_dn={sd['p_dn']:.3f} ", _WHT), _ok(sd["p_dn_ok"]), _AND,
+        _S(f"rl={sd['rl']} ",         _WHT), _ok(sd["rl_ok"]),
+        _RP, _RB,
+        _AND, _S("sq ",  _WHT), _ok(sd["sq_ok"]),
+        _AND, _S("ema ", _WHT), _ok(sd["ema_ok"]),
+    ]
+
+
 _TOP = f"{_BDR}╔{'═'*_W}╗{_R}"
 _DIV = f"{_BDR}╠{'═'*_W}╣{_R}"
 _BOT = f"{_BDR}╚{'═'*_W}╝{_R}"
@@ -138,7 +168,8 @@ def _print_dashboard(ts, price: float, prev_price: float,
                      balance: float, equity: float,
                      pos, status: str,
                      n_trades: int, wins: int, net_pnl: float,
-                     skip_reason: str, bar_count: int, symbol: str) -> None:
+                     skip_reason: str, bar_count: int, symbol: str,
+                     skip_data: dict | None = None) -> None:
     global _W
 
     # ── Adapt to terminal size ────────────────────────────────────────────────
@@ -254,8 +285,12 @@ def _print_dashboard(ts, price: float, prev_price: float,
     out.append(DIV)
 
     # ── Signal status ─────────────────────────────────────────────────────────
-    sk = skip_reason[:max(0, _W - 9)]
-    out.append(_L(_sp(4), _S("► ", _GLD + _BD), _sp(1), _S(sk, _GRY)))
+    sig = _sig_segs(skip_data)
+    if sig:
+        out.append(_L(_sp(4), _S("► ", _GLD + _BD), *sig))
+    else:
+        sk = skip_reason[:max(0, _W - 9)]
+        out.append(_L(_sp(4), _S("► ", _GLD + _BD), _sp(1), _S(sk, _GRY)))
 
     # ── Event log – fills remaining terminal height ───────────────────────────
     used      = len(out) + 2           # +DIV before log section +BOT
@@ -533,7 +568,7 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
     _dash: dict = {
         "ts": None, "price": 0.0, "prev_price": 0.0,
         "p_up": 0.0, "p_down": 0.0,
-        "skip": "", "bar": 0,
+        "skip": "", "bar": 0, "skip_data": {},
     }
 
     def _redraw():
@@ -561,6 +596,7 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
             balance, equity, pos, status,
             nt, wins, net_pnl,
             skip, _dash["bar"], symbol,
+            skip_data=_dash["skip_data"] if status == "FLAT" else None,
         )
 
     # ── Background SL/TP guard + dashboard refresh (every 5 s) ───────────────
@@ -630,6 +666,7 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
             _dash["p_up"]       = float(p_up)
             _dash["p_down"]     = float(p_down)
             _dash["skip"]       = engine.last_skip_reason
+            _dash["skip_data"]  = engine.last_skip_data
             _dash["bar"]        = engine.bar_count
             prev_price          = _dash["prev_price"]
             _redraw()
