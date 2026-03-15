@@ -172,13 +172,17 @@ _BOT = f"{_BDR}╚{'═'*_W}╝{_R}"
 _BLK = f"{_BDR}║{' '*_W}║{_R}"
 
 
-def _draw_chart(candles: list, width: int, height: int) -> list:
+def _draw_chart(candles: list, width: int, height: int,
+                live_candle: dict | None = None) -> list:
     """Render a mini OHLC candlestick chart inside the box. Returns raw line strings."""
-    if not candles or height < 3 or width < 4:
+    all_c = list(candles)
+    if live_candle and live_candle.get("open", 0) > 0:
+        all_c.append(live_candle)
+    if not all_c or height < 3 or width < 4:
         return []
 
-    n  = min(width, len(candles))
-    cs = candles[-n:]
+    n  = min(width, len(all_c))
+    cs = all_c[-n:]
 
     lo = min(c["low"]  for c in cs)
     hi = max(c["high"] for c in cs)
@@ -223,7 +227,8 @@ def _print_dashboard(ts, price: float, prev_price: float,
                      skip_reason: str, bar_count: int, symbol: str,
                      skip_data: dict | None = None,
                      T_up: float = 0.6, T_down: float = 0.6,
-                     leverage: int = 1) -> None:
+                     leverage: int = 1,
+                     live_candle: dict | None = None) -> None:
     global _W
 
     # ── Adapt to terminal size ────────────────────────────────────────────────
@@ -391,7 +396,7 @@ def _print_dashboard(ts, price: float, prev_price: float,
     remaining = max(0, rows - used - 1)
     if remaining >= 6:
         chart_h     = remaining - 1    # -1 for the DIV separator
-        chart_lines = _draw_chart(_candle_buffer, _W, chart_h)
+        chart_lines = _draw_chart(_candle_buffer, _W, chart_h, live_candle)
         if chart_lines:
             out.append(DIV)
             out.extend(chart_lines)
@@ -404,7 +409,7 @@ def _print_dashboard(ts, price: float, prev_price: float,
     out.append(BOT)
 
     # ── Render: jump to top-left, clear to end, write atomically ─────────────
-    sys.stdout.write("\033[H\033[J" + "\n".join(out) + "\n")
+    sys.stdout.write("\033[H" + "\n".join(out) + "\n")
     sys.stdout.flush()
 
 
@@ -625,7 +630,7 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
     # ── Banner ────────────────────────────────────────────────────────────────
     cols, _ = shutil.get_terminal_size((82, 30))
     W2 = cols
-    sys.stdout.write("\033[2J\033[H")   # clear full screen before banner
+    sys.stdout.write("\033[?1049h\033[2J\033[H")   # enter alt screen, clear, go home
     sys.stdout.flush()
     print(f"{_BDR}{'═'*W2}{_R}")
     print(f"  {_HDR}{_BD}*** LIVE TRADING  –  REAL MONEY  –  BINANCE FUTURES ***{_R}")
@@ -649,6 +654,7 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
         "ts": None, "price": 0.0, "prev_price": 0.0,
         "p_up": 0.0, "p_down": 0.0,
         "skip": "", "bar": 0, "skip_data": {},
+        "live_candle": {},
     }
 
     def _redraw():
@@ -658,6 +664,12 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
         balance    = portfolio.capital
         live_price = _price_ref[0] if _price_ref[0] > 0 else _dash["price"]
         equity     = portfolio.mark_to_market(live_price)
+        # Keep live candle high/low/close up to date
+        lc = _dash["live_candle"]
+        if lc.get("open", 0) > 0 and live_price > 0:
+            lc["high"]  = max(lc["high"],  live_price)
+            lc["low"]   = min(lc["low"],   live_price)
+            lc["close"] = live_price
         if pos is not None:
             status = "LONG" if pos.direction == 1 else "SHORT"
             skip   = "in_pos"
@@ -680,6 +692,7 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
             skip_data=_dash["skip_data"] if status == "FLAT" else None,
             T_up=tc.get("T_up", 0.6), T_down=tc.get("T_down", 0.6),
             leverage=portfolio.leverage,
+            live_candle=_dash["live_candle"],
         )
 
     # ── Background SL/TP guard + dashboard refresh (every 5 s) ───────────────
@@ -741,6 +754,8 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
             if len(_candle_buffer) > _CANDLE_BUF_MAX:
                 del _candle_buffer[:-_CANDLE_BUF_MAX]
             await _broadcast(c_msg)
+            # Reset live candle for the new bar (open = this bar's close)
+            _dash["live_candle"] = {"open": price, "high": price, "low": price, "close": price}
 
             feat_row = feat_engine.update(candle)
             if feat_row is None:
@@ -917,6 +932,8 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
             print("\n  No open position on exit.")
 
         engine.close_log()
+        sys.stdout.write("\033[?1049l")   # restore normal screen before summary
+        sys.stdout.flush()
 
         summary = portfolio.summary()
         print(f"\n{'='*50}")
