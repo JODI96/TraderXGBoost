@@ -174,47 +174,52 @@ _BLK = f"{_BDR}║{' '*_W}║{_R}"
 
 def _draw_chart(candles: list, width: int, height: int,
                 live_candle: dict | None = None) -> list:
-    """Render a mini OHLC candlestick chart inside the box. Returns raw line strings."""
+    """Render a mini OHLC candlestick chart. Each candle = 2 chars (body + separator)."""
     all_c = list(candles)
-    if live_candle and live_candle.get("open", 0) > 0:
+    live  = live_candle and live_candle.get("open", 0) > 0
+    if live:
         all_c.append(live_candle)
     if not all_c or height < 3 or width < 4:
         return []
 
-    n  = min(width, len(all_c))
-    cs = all_c[-n:]
+    # 2 chars per candle: body char + dim separator
+    n_candles = min(width // 2, len(all_c))
+    cs        = all_c[-n_candles:]
+    SEP       = f"{_DGR}│{_R}"     # dim separator between candles
 
-    lo = min(c["low"]  for c in cs)
-    hi = max(c["high"] for c in cs)
+    lo  = min(c["low"]  for c in cs)
+    hi  = max(c["high"] for c in cs)
     if hi == lo:
         hi = lo + 1.0
     rng = hi - lo
 
-    def _row(p: float) -> int:
+    def _ri(p: float) -> int:
         return max(0, min(height - 1, round((hi - p) / rng * (height - 1))))
 
-    # Build grid: list of lists of (char, ansi_color)
-    grid = [[(" ", "") for _ in range(n)] for _ in range(height)]
+    # grid[row][col] = (char, color_str)
+    grid = [[(" ", "") for _ in range(n_candles)] for _ in range(height)]
 
-    for col, c in enumerate(cs):
-        bull  = c["close"] >= c["open"]
-        color = _GRN if bull else _RED
-        wt = _row(c["high"])
-        wb = _row(c["low"])
-        bt = _row(max(c["open"], c["close"]))
-        bb = _row(min(c["open"], c["close"]))
-        if bt == bb:                     # doji – ensure 1-row body
+    for ci, c in enumerate(cs):
+        bull    = c["close"] >= c["open"]
+        is_live = live and ci == len(cs) - 1
+        color   = (_c(64) if bull else _c(160)) if is_live else (_GRN if bull else _RED)
+        wt = _ri(c["high"])
+        wb = _ri(c["low"])
+        bt = _ri(max(c["open"], c["close"]))
+        bb = _ri(min(c["open"], c["close"]))
+        if bt == bb:
             bb = min(height - 1, bb + 1)
         for r in range(height):
             if bt <= r <= bb:
-                grid[r][col] = ("█", color)
+                grid[r][ci] = ("█", color)
             elif wt <= r <= wb:
-                grid[r][col] = ("│", color)
+                grid[r][ci] = ("│", color)
 
     lines = []
     for r in range(height):
-        body = "".join(f"{col}{ch}{_R}" for ch, col in grid[r])
-        body += " " * max(0, width - n)   # pad if fewer candles than width
+        body  = "".join(f"{col}{ch}{_R}{SEP}" for ch, col in grid[r])
+        used  = n_candles * 2
+        body += " " * max(0, width - used)
         lines.append(f"{_BDR}║{_R}{body}{_BDR}║{_R}")
     return lines
 
@@ -394,10 +399,17 @@ def _print_dashboard(ts, price: float, prev_price: float,
     # ── Chart or blank fill ───────────────────────────────────────────────────
     used      = len(out) + 1           # +1 for BOT
     remaining = max(0, rows - used - 1)
-    if remaining >= 6:
-        chart_h     = remaining - 1    # -1 for the DIV separator
+    if remaining >= 7:
+        # 1 DIV + 1 title row + 1 DIV + chart rows + BOT
+        chart_h     = remaining - 3
         chart_lines = _draw_chart(_candle_buffer, _W, chart_h, live_candle)
         if chart_lines:
+            n_shown  = len(_candle_buffer) + (1 if live_candle and live_candle.get("open", 0) > 0 else 0)
+            n_vis    = min(_W // 2, n_shown)
+            hdr_text = f"  1m CHART  –  {n_vis} candles"
+            hdr_gap  = max(0, _W - len(hdr_text) - 2)
+            out.append(DIV)
+            out.append(_L(_S(hdr_text, _GRY), _sp(hdr_gap), _S("←older  newer→ ", _DGR)))
             out.append(DIV)
             out.extend(chart_lines)
         else:
