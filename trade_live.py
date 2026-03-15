@@ -172,6 +172,49 @@ _BOT = f"{_BDR}╚{'═'*_W}╝{_R}"
 _BLK = f"{_BDR}║{' '*_W}║{_R}"
 
 
+def _draw_chart(candles: list, width: int, height: int) -> list:
+    """Render a mini OHLC candlestick chart inside the box. Returns raw line strings."""
+    if not candles or height < 3 or width < 4:
+        return []
+
+    n  = min(width, len(candles))
+    cs = candles[-n:]
+
+    lo = min(c["low"]  for c in cs)
+    hi = max(c["high"] for c in cs)
+    if hi == lo:
+        hi = lo + 1.0
+    rng = hi - lo
+
+    def _row(p: float) -> int:
+        return max(0, min(height - 1, round((hi - p) / rng * (height - 1))))
+
+    # Build grid: list of lists of (char, ansi_color)
+    grid = [[(" ", "") for _ in range(n)] for _ in range(height)]
+
+    for col, c in enumerate(cs):
+        bull  = c["close"] >= c["open"]
+        color = _GRN if bull else _RED
+        wt = _row(c["high"])
+        wb = _row(c["low"])
+        bt = _row(max(c["open"], c["close"]))
+        bb = _row(min(c["open"], c["close"]))
+        if bt == bb:                     # doji – ensure 1-row body
+            bb = min(height - 1, bb + 1)
+        for r in range(height):
+            if bt <= r <= bb:
+                grid[r][col] = ("█", color)
+            elif wt <= r <= wb:
+                grid[r][col] = ("│", color)
+
+    lines = []
+    for r in range(height):
+        body = "".join(f"{col}{ch}{_R}" for ch, col in grid[r])
+        body += " " * max(0, width - n)   # pad if fewer candles than width
+        lines.append(f"{_BDR}║{_R}{body}{_BDR}║{_R}")
+    return lines
+
+
 def _print_dashboard(ts, price: float, prev_price: float,
                      p_up: float, p_down: float,
                      balance: float, equity: float,
@@ -343,11 +386,21 @@ def _print_dashboard(ts, price: float, prev_price: float,
             text = entry[:_W - 4]
             out.append(_L(_sp(2), _S(text, col)))
 
-    # ── Fill remaining rows with blank lines then close box ───────────────────
-    used  = len(out) + 1               # +1 for BOT
-    fill  = max(0, rows - used - 1)
-    for _ in range(fill):
-        out.append(BLK)
+    # ── Chart or blank fill ───────────────────────────────────────────────────
+    used      = len(out) + 1           # +1 for BOT
+    remaining = max(0, rows - used - 1)
+    if remaining >= 6:
+        chart_h     = remaining - 1    # -1 for the DIV separator
+        chart_lines = _draw_chart(_candle_buffer, _W, chart_h)
+        if chart_lines:
+            out.append(DIV)
+            out.extend(chart_lines)
+        else:
+            for _ in range(remaining):
+                out.append(BLK)
+    else:
+        for _ in range(remaining):
+            out.append(BLK)
     out.append(BOT)
 
     # ── Render: jump to top-left, clear to end, write atomically ─────────────
@@ -633,28 +686,32 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
     _price_ref = [0.0]
 
     async def _background_guard():
+        _tick = 0
         while True:
             try:
-                await asyncio.sleep(5)
+                await asyncio.sleep(1)
             except asyncio.CancelledError:
                 return
+            _tick += 1
             if _price_ref[0] > 0:
-                # Fetch live mark price so dashboard refreshes between bars
-                try:
-                    tk = portfolio._client.futures_mark_price(symbol=portfolio.symbol)
-                    mp = float(tk.get("markPrice") or tk.get("price") or 0)
-                    if mp > 0:
-                        _price_ref[0] = mp
-                except Exception:
-                    pass
-                try:
-                    portfolio.handle_pending_fill_immediate(
-                        sl_pct=tc.get("sl_pct", 0.002),
-                        tp_pct=tc.get("tp_pct", 0.006),
-                    )
-                    portfolio.verify_protection(_price_ref[0])
-                except (Exception, KeyboardInterrupt) as exc:
-                    logger.warning(f"[bg_guard] error: {exc}")
+                # Every 5 s: fetch live price + run guard/fill checks
+                if _tick % 5 == 0:
+                    try:
+                        tk = portfolio._client.futures_mark_price(symbol=portfolio.symbol)
+                        mp = float(tk.get("markPrice") or tk.get("price") or 0)
+                        if mp > 0:
+                            _price_ref[0] = mp
+                    except Exception:
+                        pass
+                    try:
+                        portfolio.handle_pending_fill_immediate(
+                            sl_pct=tc.get("sl_pct", 0.002),
+                            tp_pct=tc.get("tp_pct", 0.006),
+                        )
+                        portfolio.verify_protection(_price_ref[0])
+                    except (Exception, KeyboardInterrupt) as exc:
+                        logger.warning(f"[bg_guard] error: {exc}")
+                # Every 1 s: redraw dashboard (uses latest _price_ref[0])
                 _redraw()
 
     bg_guard_task = asyncio.create_task(_background_guard())
