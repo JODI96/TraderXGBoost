@@ -31,6 +31,7 @@ import json
 import logging
 import datetime
 import os
+import shutil
 import sys
 import threading
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -138,29 +139,38 @@ def _print_dashboard(ts, price: float, prev_price: float,
                      pos, status: str,
                      n_trades: int, wins: int, net_pnl: float,
                      skip_reason: str, bar_count: int, symbol: str) -> None:
+    global _W
 
-    out = ["\n", _TOP]
+    # ── Adapt to terminal size ────────────────────────────────────────────────
+    cols, rows = shutil.get_terminal_size((82, 30))
+    _W = max(60, cols - 2)
+    TOP = f"{_BDR}╔{'═'*_W}╗{_R}"
+    DIV = f"{_BDR}╠{'═'*_W}╣{_R}"
+    BOT = f"{_BDR}╚{'═'*_W}╝{_R}"
+    BLK = f"{_BDR}║{' '*_W}║{_R}"
+
+    out = [TOP]
 
     # ── Header ────────────────────────────────────────────────────────────────
     sym_text = f"  >> {symbol}  LIVE FUTURES"
     ts_text  = ts.strftime(" %Y-%m-%d  %H:%M:%S UTC  ")
-    gap      = _W - len(sym_text) - len(ts_text)
+    gap      = max(0, _W - len(sym_text) - len(ts_text))
     out.append(_L(_S(sym_text, _HDR + _BD), _sp(gap), _S(ts_text, _GRY)))
-    out.append(_DIV)
-    out.append(_BLK)
+    out.append(DIV)
+    out.append(BLK)
 
     # ── Price + Bar + Position status ─────────────────────────────────────────
     diff        = price - (prev_price if prev_price > 0 else price)
-    price_text  = f"${price:>12,.2f}"          # 13 chars
+    price_text  = f"${price:>12,.2f}"
     if diff > 0:
         arr_text, arr_col = f"▲  +{diff:,.2f}", _GRN
     elif diff < 0:
         arr_text, arr_col = f"▼  {diff:,.2f}",  _RED
     else:
         arr_text, arr_col = "─",                 _GRY
-    arr_text = f"{arr_text:<12}"               # pad to 12
+    arr_text = f"{arr_text:<12}"
 
-    bar_text = f"BAR #{bar_count:<5}"          # 10 chars
+    bar_text = f"BAR #{bar_count:<5}"
     if status == "LONG":
         pos_text, pos_col = "◆  LONG   ", _GRN + _BD
     elif status == "SHORT":
@@ -172,42 +182,41 @@ def _print_dashboard(ts, price: float, prev_price: float,
     else:
         pos_text, pos_col = "─  FLAT   ", _GRY
 
-    # left=31  right=23  gap=18
     left_w  = 4 + 13 + 2 + 12
     right_w = 10 + 3 + 10 + 2
-    gap     = _W - left_w - right_w
+    gap     = max(0, _W - left_w - right_w)
     out.append(_L(
         _sp(4), _S(price_text, _WHT + _BD), _sp(2), _S(arr_text, arr_col),
         _sp(gap),
         _S(bar_text, _DGR), _sp(3), _S(pos_text, pos_col), _sp(2),
     ))
-    out.append(_BLK)
-    out.append(_DIV)
+    out.append(BLK)
+    out.append(DIV)
 
     # ── Probability bars ──────────────────────────────────────────────────────
-    BAR_W    = 24
-    up_pct   = f"{p_up   * 100:5.1f}%"   # 6 chars
-    dn_pct   = f"{p_down * 100:5.1f}%"
-    _now     = datetime.datetime.utcnow()
+    # Fixed prefix: 4+5+3+6+3=21  Fixed suffix: 2+"NEXT "+4=11  BAR_W fills rest
+    BAR_W     = max(16, _W - 21 - 11)
+    up_pct    = f"{p_up   * 100:5.1f}%"
+    dn_pct    = f"{p_down * 100:5.1f}%"
+    _now      = datetime.datetime.utcnow()
     secs_left = 60 - _now.second
-    timer_s  = f"0:{secs_left:02d}"       # "0:47"
-    # left block = 4+5+3+6+3+BAR_W = 45; right = "NEXT  0:XX" = 10; gap = 72-45-10 = 17
+    timer_s   = f"0:{secs_left:02d}"
     out.append(_L(_sp(4), _S("P(UP)", _GRY), _sp(3), _S(up_pct, _GRN + _BD),
                   _sp(3), _mkbar(p_up,   BAR_W, 82),
-                  _sp(17), _S("NEXT ", _GRY), _S(timer_s, _CYN + _BD)))
+                  _sp(2), _S("NEXT ", _GRY), _S(timer_s, _CYN + _BD)))
     out.append(_L(_sp(4), _S("P(DN)", _GRY), _sp(3), _S(dn_pct, _RED + _BD),
                   _sp(3), _mkbar(p_down, BAR_W, 196)))
-    out.append(_DIV)
+    out.append(DIV)
 
     # ── Open position details ─────────────────────────────────────────────────
     if pos is not None:
-        unreal     = equity - balance
-        u_sign     = "+" if unreal >= 0 else ""
-        u_col      = _GRN if unreal >= 0 else _RED
-        entry_s    = f"${pos.entry_price:,.2f}"
-        sl_s       = f"${pos.sl_price:,.2f}"
-        tp_s       = f"${pos.tp_price:,.2f}"
-        pnl_s      = f"{u_sign}${abs(unreal):,.2f}"
+        unreal  = equity - balance
+        u_sign  = "+" if unreal >= 0 else ""
+        u_col   = _GRN if unreal >= 0 else _RED
+        entry_s = f"${pos.entry_price:,.2f}"
+        sl_s    = f"${pos.sl_price:,.2f}"
+        tp_s    = f"${pos.tp_price:,.2f}"
+        pnl_s   = f"{u_sign}${abs(unreal):,.2f}"
         out.append(_L(
             _sp(4),
             _S("ENTRY ", _GRY), _S(entry_s, _WHT + _BD), _sp(3),
@@ -215,23 +224,22 @@ def _print_dashboard(ts, price: float, prev_price: float,
             _S("TP ",    _GRY), _S(tp_s,    _GRN + _BD), _sp(3),
             _S("PNL ",   _GRY), _S(pnl_s,   u_col + _BD), _sp(2),
         ))
-        out.append(_DIV)
+        out.append(DIV)
 
     # ── Balance / Equity ──────────────────────────────────────────────────────
-    unreal  = equity - balance
-    u_sign  = "+" if unreal >= 0 else ""
-    u_col   = _GRN if unreal >= 0 else _RED
-    bal_s   = f"${balance:>10,.2f}"
-    eq_s    = f"${equity:>10,.2f}"
-    unr_s   = f"{u_sign}${abs(unreal):>8,.2f}"
-    # 4+8+11+2 + 8+11+2 + 8+10+2 = 66 → 6 padding
+    unreal = equity - balance
+    u_sign = "+" if unreal >= 0 else ""
+    u_col  = _GRN if unreal >= 0 else _RED
+    bal_s  = f"${balance:>10,.2f}"
+    eq_s   = f"${equity:>10,.2f}"
+    unr_s  = f"{u_sign}${abs(unreal):>8,.2f}"
     out.append(_L(
         _sp(4),
         _S("BALANCE ", _GRY), _S(bal_s, _WHT + _BD), _sp(3),
         _S("EQUITY  ", _GRY), _S(eq_s,  _WHT + _BD), _sp(3),
         _S("UNREAL  ", _GRY), _S(unr_s, u_col + _BD), _sp(2),
     ))
-    out.append(_DIV)
+    out.append(DIV)
 
     # ── Session stats ─────────────────────────────────────────────────────────
     wr_s  = f"{wins / n_trades * 100:5.1f}%" if n_trades else "   ─  "
@@ -243,19 +251,19 @@ def _print_dashboard(ts, price: float, prev_price: float,
         _S("WIN RATE ", _GRY), _S(wr_s,  _GLD + _BD), _sp(4),
         _S("NET PNL  ", _GRY), _S(pnl_s, p_col + _BD), _sp(2),
     ))
-    out.append(_DIV)
+    out.append(DIV)
 
     # ── Signal status ─────────────────────────────────────────────────────────
-    max_w = _W - 9
-    sk    = skip_reason[:max_w]
+    sk = skip_reason[:max(0, _W - 9)]
     out.append(_L(_sp(4), _S("► ", _GLD + _BD), _sp(1), _S(sk, _GRY)))
 
-    # ── Event log (last 5 portfolio events) ───────────────────────────────────
-    logs = list(_portfolio_log)[-5:]
+    # ── Event log – fills remaining terminal height ───────────────────────────
+    used      = len(out) + 2           # +DIV before log section +BOT
+    n_log     = max(0, rows - used - 1)
+    logs      = list(_portfolio_log)[-n_log:] if n_log > 0 else []
     if logs:
-        out.append(_DIV)
+        out.append(DIV)
         for entry in logs:
-            # Color-code by prefix
             if "[bg_fill]" in entry:
                 col = _GRN
             elif "FAILED" in entry or "CRITICAL" in entry or "ERROR" in entry:
@@ -273,9 +281,16 @@ def _print_dashboard(ts, price: float, prev_price: float,
             text = entry[:_W - 4]
             out.append(_L(_sp(2), _S(text, col)))
 
-    out.append(_BOT)
+    # ── Fill remaining rows with blank lines then close box ───────────────────
+    used  = len(out) + 1               # +1 for BOT
+    fill  = max(0, rows - used - 1)
+    for _ in range(fill):
+        out.append(BLK)
+    out.append(BOT)
 
-    print("\n".join(out), flush=True)
+    # ── Render: jump to top-left, clear to end, write atomically ─────────────
+    sys.stdout.write("\033[H\033[J" + "\n".join(out) + "\n")
+    sys.stdout.flush()
 
 
 def _print_trade_open(pos, direction: str, p_up: float, p_down: float,
@@ -493,8 +508,11 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
     feed   = BinanceWSFeed(symbol=symbol, ws_url=ws_url)
 
     # ── Banner ────────────────────────────────────────────────────────────────
-    W2 = _W + 2
-    print(f"\n{_BDR}{'═'*W2}{_R}")
+    cols, _ = shutil.get_terminal_size((82, 30))
+    W2 = cols
+    sys.stdout.write("\033[2J\033[H")   # clear full screen before banner
+    sys.stdout.flush()
+    print(f"{_BDR}{'═'*W2}{_R}")
     print(f"  {_HDR}{_BD}*** LIVE TRADING  –  REAL MONEY  –  BINANCE FUTURES ***{_R}")
     print(f"{_BDR}{'─'*W2}{_R}")
     print(f"  {_GRY}Symbol   {_R}  {_WHT}{_BD}{symbol}{_R}   "
@@ -653,7 +671,7 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
 
                 if ev_type == "OPEN" and portfolio.position is not None:
                     pos2 = portfolio.position
-                    _print_trade_open(pos2, event.get("direction", ""), float(p_up), float(p_down), symbol)
+                    _redraw()   # refresh dashboard immediately to show new position
 
                     await _broadcast({
                         "type":      "trade_open",
@@ -674,9 +692,7 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
                     exit_p = event.get("exit_price", price)
                     nt     = len(portfolio.trade_log)
                     wins2  = sum(1 for t in portfolio.trade_log if t.net_pnl > 0)
-                    wr     = wins2 / nt * 100 if nt else 0.0
-                    _print_trade_close(reason, float(exit_p), float(pnl),
-                                       portfolio.capital, nt, wr)
+                    _redraw()   # refresh dashboard immediately to show closed position
 
                     last_t = portfolio.trade_log[-1] if portfolio.trade_log else None
                     await _broadcast({
