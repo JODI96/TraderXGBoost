@@ -32,9 +32,9 @@ import pandas as pd
 import xgboost as xgb
 import yaml
 
-import data as data_mod
 import features as feat_mod
 import labels as label_mod
+from cache import load_years_parallel, load_coin_year
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -385,6 +385,8 @@ def main() -> None:
     parser.add_argument("--sweep",     action="store_true", help="Run grid search over sweep.T_values x sweep.leverages")
     parser.add_argument("--config",    default="config.yaml")
     parser.add_argument("--artifacts", default="models")
+    parser.add_argument("--no-cache",  action="store_true",
+                        help="Force recompute features (ignore cache)")
     args = parser.parse_args()
 
     with open(args.config) as f:
@@ -394,31 +396,28 @@ def main() -> None:
     print("Loading model ...")
     model, feat_cols, thresholds = _load_artifacts(args.artifacts)
 
-    # ── Load data ─────────────────────────────────────────────────────────────
-    cfg_tmp = dict(cfg); cfg_tmp["data"] = dict(cfg["data"])
-    if args.symbol:
-        cfg_tmp["data"]["base_dir"] = (
-            f"{cfg['data']['data_root']}/{args.symbol}/full_year"
-        )
+    # ── Load data (cached per coin-year) ──────────────────────────────────────
+    coin = (args.symbol or cfg["data"]["symbol"]).upper()
+
     if args.year:
-        cfg_tmp["data"]["years"] = [args.year]
-        df_raw = data_mod.load_all(cfg_tmp)
+        years = [args.year]
     else:
-        df_raw = data_mod.load_all(cfg_tmp)
-        split  = int(len(df_raw) * (1 - cfg["training"]["test_size"]))
-        df_raw = df_raw.iloc[split:]
+        # Default: use the test-split portion of all configured years
+        years = cfg["data"]["years"]
 
-    # ── Features + Labels ─────────────────────────────────────────────────────
-    print("Computing features ...")
-    df_feat = feat_mod.compute_features(df_raw, cfg)
-    df_lab  = label_mod.compute_labels(df_raw, cfg)
+    print(f"Loading features ({coin}, years={years}) ...")
+    years_data = load_years_parallel(coin, years, cfg, no_cache=args.no_cache)
 
-    avail   = [c for c in feat_cols if c in df_feat.columns]
-    # df_lab columns: label, range_high, range_low, atr, thresh_high, thresh_low, …
-    # run_backtest reads atr_short, dist_rh_20, dist_rl_20 directly from df_feat cols
-    df_all  = df_feat.join(df_lab[["label"]], how="inner").dropna(subset=avail + ["label"])
+    # Concatenate years in order; for default mode keep only the test split
+    pieces = [years_data[yr][0] for yr in sorted(years_data)]
+    df_all = pd.concat(pieces).sort_index()
 
-    X = df_all[avail]
+    if not args.year:
+        split  = int(len(df_all) * (1 - cfg["training"]["test_size"]))
+        df_all = df_all.iloc[split:]
+
+    avail = [c for c in feat_cols if c in df_all.columns]
+    X     = df_all[avail]
 
     # ── Predict ───────────────────────────────────────────────────────────────
     print("Predicting ...")

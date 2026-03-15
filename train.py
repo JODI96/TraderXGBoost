@@ -19,6 +19,7 @@ Artifacts
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import time
@@ -31,9 +32,9 @@ import yaml
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import log_loss, classification_report
 
-import data as data_mod
 import features as feat_mod
 import labels as label_mod
+from cache import load_training_data
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -216,58 +217,29 @@ def save_artifacts(model: xgb.Booster, feature_cols: list[str],
 
 # ─────────────────────────────────────────────────────────────────────────────
 def main() -> None:
-    with open("config.yaml") as f:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--no-cache", action="store_true",
+                        help="Force recompute features (ignore cache)")
+    parser.add_argument("--config", default="config.yaml")
+    args = parser.parse_args()
+
+    with open(args.config) as f:
         cfg = yaml.safe_load(f)
 
     t0 = time.time()
 
-    # ── 1. Load data (all coins) ───────────────────────────────────────────────
+    # ── 1-3. Load + features + labels (cached per coin per year) ──────────────
     print("=" * 60)
-    print("STEP 1: Loading data for all coins")
+    print("STEP 1-3: Loading data + features + labels (cached)")
     print("=" * 60)
-    coin_data = data_mod.load_all_coins(cfg)
-    print(f"\n  Coins loaded: {list(coin_data.keys())}")
+    train_data = load_training_data(cfg, no_cache=args.no_cache)
 
-    # ── 2. Compute features + labels per coin, then concat ────────────────────
-    print("\nSTEP 2 & 3: Computing features + labels per coin")
-    feat_cols = feat_mod.get_feature_columns(cfg)
+    X_train   = train_data["X_train"]
+    y_train   = train_data["y_train"]
+    X_test    = train_data["X_val"]
+    y_test    = train_data["y_val"]
+    feat_cols = train_data["feat_cols"]
 
-    all_pieces:     list[pd.DataFrame] = []
-    all_label_dfs:  list[pd.DataFrame] = []
-    for coin, df_raw in coin_data.items():
-        print(f"\n  [{coin}] features ...")
-        df_feat = feat_mod.compute_features(df_raw, cfg)
-        print(f"  [{coin}] labels ...")
-        df_lab  = label_mod.compute_labels(df_raw, cfg)
-
-        # Keep only known feature columns that exist for this coin
-        fc = [c for c in feat_cols if c in df_feat.columns]
-        piece = df_feat[fc].join(df_lab[["label"]], how="inner").dropna()
-        print(f"  [{coin}] usable rows: {len(piece):,}")
-        all_pieces.append(piece)
-        all_label_dfs.append(df_lab.loc[piece.index])  # aligned fakeout cols
-
-    df_all = pd.concat(all_pieces).sort_index()
-    df_all_labels = pd.concat(all_label_dfs).sort_index()
-
-    # Recalculate feat_cols to only include columns present across all coins
-    feat_cols = [c for c in feat_cols if c in df_all.columns]
-    df_all = df_all[feat_cols + ["label"]].dropna()
-    df_all_labels = df_all_labels.loc[df_all.index]
-
-    label_mod.label_stats(df_all_labels)
-    print(f"\n  Total usable rows (all coins): {len(df_all):,}")
-
-    X = df_all[feat_cols]
-    y = df_all["label"].astype(int).values
-
-    # ── 5. Temporal train / test split ────────────────────────────────────────
-    test_size  = cfg["training"]["test_size"]
-    split_idx  = int(len(X) * (1 - test_size))
-    X_train    = X.iloc[:split_idx]
-    y_train    = y[:split_idx]
-    X_test     = X.iloc[split_idx:]
-    y_test     = y[split_idx:]
     print(f"\n  Train: {len(X_train):,} rows  |  Test: {len(X_test):,} rows")
     print(f"  Train period: {X_train.index[0]} -> {X_train.index[-1]}")
     print(f"  Test  period: {X_test.index[0]}  -> {X_test.index[-1]}")
