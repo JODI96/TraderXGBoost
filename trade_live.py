@@ -122,10 +122,19 @@ def _L(*segs: _S) -> str:
     return f"{_BDR}║{_R}{body}{_BDR}║{_R}"
 
 
-def _mkbar(val: float, width: int, on: int, off: int = 238) -> _S:
+def _mkbar(val: float, width: int, on: int, off: int = 238,
+           threshold: float = None) -> _S:
     filled = max(0, min(width, round(val * width)))
-    ansi   = f"\033[38;5;{on}m{'█'*filled}\033[38;5;{off}m{'░'*(width-filled)}{_R}"
-    return _S(ansi, vw=width)
+    t_pos  = max(0, min(width - 1, round(threshold * width))) if threshold is not None else -1
+    chars  = []
+    for i in range(width):
+        if i == t_pos:
+            chars.append(f"\033[38;5;220m│{_R}")   # gold threshold marker
+        elif i < filled:
+            chars.append(f"\033[38;5;{on}m█")
+        else:
+            chars.append(f"\033[38;5;{off}m░")
+    return _S("".join(chars) + _R, vw=width)
 
 
 def _sig_segs(sd: dict) -> list:
@@ -169,7 +178,9 @@ def _print_dashboard(ts, price: float, prev_price: float,
                      pos, status: str,
                      n_trades: int, wins: int, net_pnl: float,
                      skip_reason: str, bar_count: int, symbol: str,
-                     skip_data: dict | None = None) -> None:
+                     skip_data: dict | None = None,
+                     T_up: float = 0.6, T_down: float = 0.6,
+                     leverage: int = 1) -> None:
     global _W
 
     # ── Adapt to terminal size ────────────────────────────────────────────────
@@ -225,18 +236,35 @@ def _print_dashboard(ts, price: float, prev_price: float,
     out.append(DIV)
 
     # ── Probability bars ──────────────────────────────────────────────────────
-    # Fixed prefix: 4+5+3+6+3=21  Fixed suffix: 2+"NEXT "+4=11  BAR_W fills rest
-    BAR_W     = max(16, _W - 21 - 11)
+    # Prefix=21  UP suffix: 2+rh(2)+1+sq(2)+1+ema(3)+2+NEXT(5)+timer(4)=22
+    # DN suffix: 2+rl(2)=4  → BAR_W constrained by UP line = _W - 21 - 22 = _W - 43
+    BAR_W     = max(16, _W - 43)
     up_pct    = f"{p_up   * 100:5.1f}%"
     dn_pct    = f"{p_down * 100:5.1f}%"
     _now      = datetime.datetime.utcnow()
     secs_left = 60 - _now.second
     timer_s   = f"0:{secs_left:02d}"
-    out.append(_L(_sp(4), _S("P(UP)", _GRY), _sp(3), _S(up_pct, _GRN + _BD),
-                  _sp(3), _mkbar(p_up,   BAR_W, 82),
-                  _sp(2), _S("NEXT ", _GRY), _S(timer_s, _CYN + _BD)))
-    out.append(_L(_sp(4), _S("P(DN)", _GRY), _sp(3), _S(dn_pct, _RED + _BD),
-                  _sp(3), _mkbar(p_down, BAR_W, 196)))
+
+    sd     = skip_data or {}
+    rh_ok  = sd.get("rh_ok",  False)
+    rl_ok  = sd.get("rl_ok",  False)
+    sq_ok  = sd.get("sq_ok",  True)
+    ema_ok = sd.get("ema_ok", True)
+
+    def _lbl(text: str, ok: bool) -> _S:
+        return _S(text, (_GRN + _BD) if ok else (_RED + _BD))
+
+    out.append(_L(
+        _sp(4), _S("P(UP)", _GRY), _sp(3), _S(up_pct, _GRN + _BD), _sp(3),
+        _mkbar(p_up,   BAR_W, 82,  threshold=T_up),
+        _sp(2), _lbl("rh", rh_ok), _sp(1), _lbl("sq", sq_ok), _sp(1), _lbl("ema", ema_ok),
+        _sp(2), _S("NEXT ", _GRY), _S(timer_s, _CYN + _BD),
+    ))
+    out.append(_L(
+        _sp(4), _S("P(DN)", _GRY), _sp(3), _S(dn_pct, _RED + _BD), _sp(3),
+        _mkbar(p_down, BAR_W, 196, threshold=T_down),
+        _sp(2), _lbl("rl", rl_ok),
+    ))
     out.append(DIV)
 
     # ── Open position details ─────────────────────────────────────────────────
@@ -264,11 +292,13 @@ def _print_dashboard(ts, price: float, prev_price: float,
     bal_s  = f"${balance:>10,.2f}"
     eq_s   = f"${equity:>10,.2f}"
     unr_s  = f"{u_sign}${abs(unreal):>8,.2f}"
+    lev_s  = f"{leverage}x"
     out.append(_L(
         _sp(4),
         _S("BALANCE ", _GRY), _S(bal_s, _WHT + _BD), _sp(3),
         _S("EQUITY  ", _GRY), _S(eq_s,  _WHT + _BD), _sp(3),
-        _S("UNREAL  ", _GRY), _S(unr_s, u_col + _BD), _sp(2),
+        _S("UNREAL  ", _GRY), _S(unr_s, u_col + _BD), _sp(3),
+        _S("LEV ", _GRY), _S(lev_s, _GLD + _BD),
     ))
     out.append(DIV)
 
@@ -284,11 +314,8 @@ def _print_dashboard(ts, price: float, prev_price: float,
     ))
     out.append(DIV)
 
-    # ── Signal status ─────────────────────────────────────────────────────────
-    sig = _sig_segs(skip_data)
-    if sig:
-        out.append(_L(_sp(4), _S("► ", _GLD + _BD), *sig))
-    else:
+    # ── Signal status (hidden for eval – condition info is in the bars) ───────
+    if not (skip_data and skip_data.get("status") == "eval"):
         sk = skip_reason[:max(0, _W - 9)]
         out.append(_L(_sp(4), _S("► ", _GLD + _BD), _sp(1), _S(sk, _GRY)))
 
@@ -597,6 +624,8 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
             nt, wins, net_pnl,
             skip, _dash["bar"], symbol,
             skip_data=_dash["skip_data"] if status == "FLAT" else None,
+            T_up=tc.get("T_up", 0.6), T_down=tc.get("T_down", 0.6),
+            leverage=portfolio.leverage,
         )
 
     # ── Background SL/TP guard + dashboard refresh (every 5 s) ───────────────
