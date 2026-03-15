@@ -214,6 +214,26 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
     last_ts    = None
     cvd_col    = f"cvd_{cfg['features']['cvd_window']}"
 
+    # ── Background SL/TP guard (every 5 seconds between bars) ─────────────────
+    _price_ref = [0.0]
+
+    async def _background_guard():
+        while True:
+            await asyncio.sleep(5)
+            if _price_ref[0] > 0:
+                try:
+                    # Fast-path: detect limit fill and place SL/TP without waiting for bar close
+                    portfolio.handle_pending_fill_immediate(
+                        sl_pct=tc.get("sl_pct", 0.002),
+                        tp_pct=tc.get("tp_pct", 0.006),
+                    )
+                    # Verify existing position is still protected
+                    portfolio.verify_protection(_price_ref[0])
+                except Exception as exc:
+                    logger.warning(f"[bg_guard] error: {exc}")
+
+    bg_guard_task = asyncio.create_task(_background_guard())
+
     try:
         async for candle in feed:
             ts    = candle.name
@@ -222,6 +242,7 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
             buy_v = float(candle.get("taker_buy_vol", vol / 2))
             last_price = price
             last_ts    = ts
+            _price_ref[0] = price
 
             # ── Send candle to browser ────────────────────────────────────────
             await _broadcast({
@@ -350,6 +371,11 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
     except (asyncio.CancelledError, KeyboardInterrupt):
         pass
     finally:
+        bg_guard_task.cancel()
+        try:
+            await bg_guard_task
+        except asyncio.CancelledError:
+            pass
         await feed.stop()
 
         if portfolio.position is not None:

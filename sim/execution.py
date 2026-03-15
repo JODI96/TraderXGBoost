@@ -52,8 +52,7 @@ class ExecutionEngine:
         self.min_ema9_21  = tc.get("min_ema9_21_diff", -999.0)
         self.L_range      = lc.get("L_range", 20)
 
-        self.cost_rt = (lc["maker_fee"] + lc["taker_fee"] +
-                        lc["slippage"]  + lc["spread"]) * 2
+        self.limit_offset = tc.get("limit_entry_offset_pct", 0.00005)
 
         # Ensure log directory exists
         os.makedirs(os.path.dirname(log_path) if os.path.dirname(log_path) else ".", exist_ok=True)
@@ -96,6 +95,42 @@ class ExecutionEngine:
 
         trade_event = None
 
+        # ── 0. Check pending limit order fill / expiry ────────────────────────
+        if self.port.has_pending:
+            pending_age = self.port.bar_count - self.port.pending_bar
+            # Use exchange-confirmed fill if available (BinancePortfolio),
+            # otherwise fall back to simulated bar high/low check (Portfolio)
+            filled = (
+                getattr(self.port, 'limit_fill_confirmed', False) or
+                (self.port.pending_dir == 1  and low  <= self.port.pending_price) or
+                (self.port.pending_dir == -1 and high >= self.port.pending_price)
+            )
+            if pending_age >= self.time_stop:
+                self.port.cancel_pending_order()
+            elif filled:
+                fill_price  = self.port.pending_price
+                fill_dir    = self.port.pending_dir
+                fill_bar    = self.port.pending_bar
+                self.port.open_trade(
+                    direction = fill_dir,
+                    price     = fill_price,
+                    atr       = atr,
+                    sl_atr    = self.sl_atr,
+                    tp_atr    = self.tp_atr,
+                    pos_pct   = self.pos_pct,
+                    timestamp = timestamp,
+                    sl_pct    = self.sl_pct,
+                    tp_pct    = self.tp_pct,
+                    entry_bar = fill_bar,
+                )
+                trade_event = {
+                    "event":     "OPEN",
+                    "direction": "LONG" if fill_dir == 1 else "SHORT",
+                    "price":     fill_price,
+                    "sl":        self.port.position.sl_price,
+                    "tp":        self.port.position.tp_price,
+                }
+
         # ── 1. Check SL / TP exit (intrabar high/low) ────────────────────────
         if self.port.position is not None:
             reason, exit_p = self.port.check_exits(high, low)
@@ -104,13 +139,35 @@ class ExecutionEngine:
                 trade_event = {"event": "CLOSE", "reason": reason,
                                **self._trade_dict(trade)}
 
-        # ── 2. Check time-stop exit (close price) ────────────────────────────
-        if self.port.position is not None:
-            time_held = self.port.bar_count - self.port.position.entry_bar
-            if time_held >= self.time_stop:
+        # ── 1.5. Check pending limit close fill / retry ───────────────────────
+        if self.port.position is not None and self.port.has_pending_close:
+            pos_dir = self.port.position.direction
+            filled = (
+                (pos_dir == 1  and low  <= self.port.pending_close_price) or
+                (pos_dir == -1 and high >= self.port.pending_close_price)
+            )
+            if filled:
+                trade = self.port.close_trade(
+                    self.port.pending_close_price, timestamp, "LIMIT_CLOSE")
+                trade_event = {"event": "CLOSE", "reason": "LIMIT_CLOSE",
+                               **self._trade_dict(trade)}
+            elif self.port.pending_close_attempts >= 3:
                 trade = self.port.close_trade(price, timestamp, "TIME")
                 trade_event = {"event": "CLOSE", "reason": "TIME",
                                **self._trade_dict(trade)}
+            else:
+                new_close = (price * (1.0 - self.limit_offset) if pos_dir == 1
+                             else price * (1.0 + self.limit_offset))
+                self.port.update_pending_close(new_close)
+
+        # ── 2. Check time-stop → place limit close ────────────────────────────
+        if self.port.position is not None and not self.port.has_pending_close:
+            time_held = self.port.bar_count - self.port.position.entry_bar
+            if time_held >= self.time_stop:
+                pos_dir     = self.port.position.direction
+                close_price = (price * (1.0 - self.limit_offset) if pos_dir == 1
+                               else price * (1.0 + self.limit_offset))
+                self.port.place_pending_close(close_price)
 
         # ── 3. Entry logic ────────────────────────────────────────────────────
         if not self.port.can_enter:
@@ -148,45 +205,25 @@ class ExecutionEngine:
                 f" AND sq {_Y(sq_ok)} AND ema {_Y(ema_ok)}"
             )
 
-            # LONG: up-break anticipated
+            # LONG: up-break anticipated → place limit buy below current price
             if (p_up >= self.T_up and
                     not np.isnan(dist_rh) and dist_rh <= self.d_max and
                     sq_ok and ema_ok):
-                self.port.open_trade(
-                    direction = 1,
-                    price     = price,
-                    atr       = atr,
-                    sl_atr    = self.sl_atr,
-                    tp_atr    = self.tp_atr,
-                    pos_pct   = self.pos_pct,
-                    timestamp = timestamp,
-                    sl_pct    = self.sl_pct,
-                    tp_pct    = self.tp_pct,
-                )
-                self.last_skip_reason = "ENTERED_LONG"
-                trade_event = {"event": "OPEN", "direction": "LONG",
-                               "price": price, "p_up": p_up,
-                               "sl": self.port.position.sl_price,
-                               "tp": self.port.position.tp_price}
+                limit_price = price * (1.0 - self.limit_offset)
+                self.port.place_pending_order(1, limit_price)
+                self.last_skip_reason = "PENDING_LONG"
+                trade_event = {"event": "PENDING", "direction": "LONG",
+                               "signal_price": price, "limit_price": limit_price,
+                               "p_up": p_up}
 
-            # SHORT: down-break anticipated
+            # SHORT: down-break anticipated → place limit sell above current price
             elif (p_down >= self.T_down and rl_ok and sq_ok and ema_ok):
-                self.port.open_trade(
-                    direction = -1,
-                    price     = price,
-                    atr       = atr,
-                    sl_atr    = self.sl_atr,
-                    tp_atr    = self.tp_atr,
-                    pos_pct   = self.pos_pct,
-                    timestamp = timestamp,
-                    sl_pct    = self.sl_pct,
-                    tp_pct    = self.tp_pct,
-                )
-                self.last_skip_reason = "ENTERED_SHORT"
-                trade_event = {"event": "OPEN", "direction": "SHORT",
-                               "price": price, "p_down": p_down,
-                               "sl": self.port.position.sl_price,
-                               "tp": self.port.position.tp_price}
+                limit_price = price * (1.0 + self.limit_offset)
+                self.port.place_pending_order(-1, limit_price)
+                self.last_skip_reason = "PENDING_SHORT"
+                trade_event = {"event": "PENDING", "direction": "SHORT",
+                               "signal_price": price, "limit_price": limit_price,
+                               "p_down": p_down}
 
         # ── Log bar ───────────────────────────────────────────────────────────
         bar_log = {

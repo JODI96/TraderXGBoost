@@ -29,6 +29,7 @@ import argparse
 import asyncio
 import json
 import logging
+import datetime
 import os
 import sys
 import threading
@@ -59,9 +60,281 @@ _logging.getLogger("websockets.server").setLevel(logging.CRITICAL)
 
 import urllib.request as _urllib_req
 
+# ── ANSI enable (Windows Terminal needs explicit flag) ────────────────────────
+if sys.platform == "win32":
+    import ctypes as _ct
+    try:
+        _k = _ct.windll.kernel32
+        _h = _k.GetStdHandle(-11)
+        _m = _ct.c_ulong()
+        _k.GetConsoleMode(_h, _ct.byref(_m))
+        _k.SetConsoleMode(_h, _m.value | 0x0004)
+    except Exception:
+        os.system("")
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
+
+# ── Terminal UI ───────────────────────────────────────────────────────────────
+def _c(n: int) -> str:
+    return f"\033[38;5;{n}m"
+
+_R   = "\033[0m"
+_BD  = "\033[1m"
+_DM  = "\033[2m"
+_BDR = _c(24)    # steel-blue borders
+_HDR = _c(51)    # electric-cyan header
+_WHT = _c(255)   # white values
+_GRN = _c(82)    # neon green
+_RED = _c(196)   # bright red
+_GLD = _c(220)   # gold
+_GRY = _c(244)   # label grey
+_DGR = _c(238)   # dim grey
+_CYN = _c(87)    # light cyan
+_ORG = _c(208)   # orange
+
+_W = 72   # inner width (between ║ chars)
+
+
+class _S:
+    """Styled segment. vw = visual (on-screen) width; defaults to len(text)."""
+    def __init__(self, text: str, color: str = "", vw: int = -1):
+        self.text  = str(text)
+        self.color = color
+        self.w     = len(self.text) if vw < 0 else vw
+    def __str__(self) -> str:
+        return f"{self.color}{self.text}{_R}" if self.color else self.text
+
+
+def _sp(n: int = 1) -> _S:
+    return _S(" " * n)
+
+
+def _L(*segs: _S) -> str:
+    """Build  ║ segments… ║  line, right-padded to _W."""
+    used = sum(s.w for s in segs)
+    pad  = max(0, _W - used)
+    body = "".join(str(s) for s in segs) + " " * pad
+    return f"{_BDR}║{_R}{body}{_BDR}║{_R}"
+
+
+def _mkbar(val: float, width: int, on: int, off: int = 238) -> _S:
+    filled = max(0, min(width, round(val * width)))
+    ansi   = f"\033[38;5;{on}m{'█'*filled}\033[38;5;{off}m{'░'*(width-filled)}{_R}"
+    return _S(ansi, vw=width)
+
+
+_TOP = f"{_BDR}╔{'═'*_W}╗{_R}"
+_DIV = f"{_BDR}╠{'═'*_W}╣{_R}"
+_BOT = f"{_BDR}╚{'═'*_W}╝{_R}"
+_BLK = f"{_BDR}║{' '*_W}║{_R}"
+
+
+def _print_dashboard(ts, price: float, prev_price: float,
+                     p_up: float, p_down: float,
+                     balance: float, equity: float,
+                     pos, status: str,
+                     n_trades: int, wins: int, net_pnl: float,
+                     skip_reason: str, bar_count: int, symbol: str) -> None:
+
+    out = ["\n", _TOP]
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    sym_text = f"  >> {symbol}  LIVE FUTURES"
+    ts_text  = ts.strftime(" %Y-%m-%d  %H:%M:%S UTC  ")
+    gap      = _W - len(sym_text) - len(ts_text)
+    out.append(_L(_S(sym_text, _HDR + _BD), _sp(gap), _S(ts_text, _GRY)))
+    out.append(_DIV)
+    out.append(_BLK)
+
+    # ── Price + Bar + Position status ─────────────────────────────────────────
+    diff        = price - (prev_price if prev_price > 0 else price)
+    price_text  = f"${price:>12,.2f}"          # 13 chars
+    if diff > 0:
+        arr_text, arr_col = f"▲  +{diff:,.2f}", _GRN
+    elif diff < 0:
+        arr_text, arr_col = f"▼  {diff:,.2f}",  _RED
+    else:
+        arr_text, arr_col = "─",                 _GRY
+    arr_text = f"{arr_text:<12}"               # pad to 12
+
+    bar_text = f"BAR #{bar_count:<5}"          # 10 chars
+    if status == "LONG":
+        pos_text, pos_col = "◆  LONG   ", _GRN + _BD
+    elif status == "SHORT":
+        pos_text, pos_col = "◆  SHORT  ", _RED + _BD
+    elif status == "PENDING_LONG":
+        pos_text, pos_col = "◈  PEND L ", _GLD + _BD
+    elif status == "PENDING_SHORT":
+        pos_text, pos_col = "◈  PEND S ", _GLD + _BD
+    else:
+        pos_text, pos_col = "─  FLAT   ", _GRY
+
+    # left=31  right=23  gap=18
+    left_w  = 4 + 13 + 2 + 12
+    right_w = 10 + 3 + 10 + 2
+    gap     = _W - left_w - right_w
+    out.append(_L(
+        _sp(4), _S(price_text, _WHT + _BD), _sp(2), _S(arr_text, arr_col),
+        _sp(gap),
+        _S(bar_text, _DGR), _sp(3), _S(pos_text, pos_col), _sp(2),
+    ))
+    out.append(_BLK)
+    out.append(_DIV)
+
+    # ── Probability bars ──────────────────────────────────────────────────────
+    BAR_W    = 24
+    up_pct   = f"{p_up   * 100:5.1f}%"   # 6 chars
+    dn_pct   = f"{p_down * 100:5.1f}%"
+    _now     = datetime.datetime.utcnow()
+    secs_left = 60 - _now.second
+    timer_s  = f"0:{secs_left:02d}"       # "0:47"
+    # left block = 4+5+3+6+3+BAR_W = 45; right = "NEXT  0:XX" = 10; gap = 72-45-10 = 17
+    out.append(_L(_sp(4), _S("P(UP)", _GRY), _sp(3), _S(up_pct, _GRN + _BD),
+                  _sp(3), _mkbar(p_up,   BAR_W, 82),
+                  _sp(17), _S("NEXT ", _GRY), _S(timer_s, _CYN + _BD)))
+    out.append(_L(_sp(4), _S("P(DN)", _GRY), _sp(3), _S(dn_pct, _RED + _BD),
+                  _sp(3), _mkbar(p_down, BAR_W, 196)))
+    out.append(_DIV)
+
+    # ── Open position details ─────────────────────────────────────────────────
+    if pos is not None:
+        unreal     = equity - balance
+        u_sign     = "+" if unreal >= 0 else ""
+        u_col      = _GRN if unreal >= 0 else _RED
+        entry_s    = f"${pos.entry_price:,.2f}"
+        sl_s       = f"${pos.sl_price:,.2f}"
+        tp_s       = f"${pos.tp_price:,.2f}"
+        pnl_s      = f"{u_sign}${abs(unreal):,.2f}"
+        out.append(_L(
+            _sp(4),
+            _S("ENTRY ", _GRY), _S(entry_s, _WHT + _BD), _sp(3),
+            _S("SL ",    _GRY), _S(sl_s,    _RED + _BD), _sp(3),
+            _S("TP ",    _GRY), _S(tp_s,    _GRN + _BD), _sp(3),
+            _S("PNL ",   _GRY), _S(pnl_s,   u_col + _BD), _sp(2),
+        ))
+        out.append(_DIV)
+
+    # ── Balance / Equity ──────────────────────────────────────────────────────
+    unreal  = equity - balance
+    u_sign  = "+" if unreal >= 0 else ""
+    u_col   = _GRN if unreal >= 0 else _RED
+    bal_s   = f"${balance:>10,.2f}"
+    eq_s    = f"${equity:>10,.2f}"
+    unr_s   = f"{u_sign}${abs(unreal):>8,.2f}"
+    # 4+8+11+2 + 8+11+2 + 8+10+2 = 66 → 6 padding
+    out.append(_L(
+        _sp(4),
+        _S("BALANCE ", _GRY), _S(bal_s, _WHT + _BD), _sp(3),
+        _S("EQUITY  ", _GRY), _S(eq_s,  _WHT + _BD), _sp(3),
+        _S("UNREAL  ", _GRY), _S(unr_s, u_col + _BD), _sp(2),
+    ))
+    out.append(_DIV)
+
+    # ── Session stats ─────────────────────────────────────────────────────────
+    wr_s  = f"{wins / n_trades * 100:5.1f}%" if n_trades else "   ─  "
+    pnl_s = f"{'+' if net_pnl >= 0 else ''}${net_pnl:,.2f}"
+    p_col = _GRN if net_pnl >= 0 else _RED
+    out.append(_L(
+        _sp(4),
+        _S(f"{n_trades} TRADES", _WHT + _BD), _sp(4),
+        _S("WIN RATE ", _GRY), _S(wr_s,  _GLD + _BD), _sp(4),
+        _S("NET PNL  ", _GRY), _S(pnl_s, p_col + _BD), _sp(2),
+    ))
+    out.append(_DIV)
+
+    # ── Signal status ─────────────────────────────────────────────────────────
+    max_w = _W - 9
+    sk    = skip_reason[:max_w]
+    out.append(_L(_sp(4), _S("► ", _GLD + _BD), _sp(1), _S(sk, _GRY)))
+
+    # ── Event log (last 5 portfolio events) ───────────────────────────────────
+    logs = list(_portfolio_log)[-5:]
+    if logs:
+        out.append(_DIV)
+        for entry in logs:
+            # Color-code by prefix
+            if "[bg_fill]" in entry:
+                col = _GRN
+            elif "FAILED" in entry or "CRITICAL" in entry or "ERROR" in entry:
+                col = _RED
+            elif "[reconcile]" in entry:
+                col = _ORG
+            elif "[guard]" in entry or "[bg_guard]" in entry:
+                col = _CYN
+            elif "[PENDING]" in entry:
+                col = _GLD
+            elif "[close]" in entry or "[exit]" in entry or "[pos]" in entry:
+                col = _GRY
+            else:
+                col = _DGR
+            text = entry[:_W - 4]
+            out.append(_L(_sp(2), _S(text, col)))
+
+    out.append(_BOT)
+
+    print("\n".join(out), flush=True)
+
+
+def _print_trade_open(pos, direction: str, p_up: float, p_down: float,
+                      symbol: str) -> None:
+    size_usd = pos.size * pos.entry_price
+    sl_pts   = abs(pos.entry_price - pos.sl_price)
+    tp_pts   = abs(pos.tp_price    - pos.entry_price)
+    col      = _GRN if direction == "LONG" else _RED
+    W2       = 46
+    top      = f"{col}╔{'═'*W2}╗{_R}"
+    div      = f"{col}╠{'═'*W2}╣{_R}"
+    bot      = f"{col}╚{'═'*W2}╝{_R}"
+    def row(label, value, vcol=""):
+        lbl = f"{_GRY}{label:<8}{_R}"
+        val = f"{vcol}{value}{_R}" if vcol else value
+        inner = f"  {lbl}  {val}"
+        pad = W2 - 2 - 8 - 2 - len(value)
+        return f"{col}║{_R}{inner}{' '*max(0,pad)}{col}║{_R}"
+    title = f"  {'▲' if direction=='LONG' else '▼'}  POSITION OPENED  {direction:<5}  "
+    title_pad = W2 - len(title.replace(_BD,'').replace(col,'').replace(_R,''))
+    print(f"\n{top}")
+    print(f"{col}║{_R}{_BD}{col}{title}{_R}{' '*max(0, W2-len(title))}{col}║{_R}")
+    print(div)
+    print(row("ENTRY",  f"${pos.entry_price:,.2f}",  _WHT + _BD))
+    print(row("SL",     f"${pos.sl_price:,.2f}  ({sl_pts:.2f} pts)", _RED))
+    print(row("TP",     f"${pos.tp_price:,.2f}  ({tp_pts:.2f} pts)", _GRN))
+    print(row("SIZE",   f"{pos.size:.6f} {symbol[:3]}  (${size_usd:,.2f})", _GRY))
+    print(f"{bot}\n")
+
+
+def _print_trade_close(reason: str, exit_p: float, pnl: float,
+                       balance: float, n: int, wr: float) -> None:
+    col     = _GRN if pnl >= 0 else _RED
+    sign    = "+" if pnl >= 0 else ""
+    sym     = {"TP": "✓ TAKE PROFIT", "SL": "✗ STOP LOSS",
+               "TIME": "◷ TIME STOP", "FORCE": "■ FORCE CLOSE",
+               "GUARD_FAIL": "! GUARD CLOSE", "LIMIT_CLOSE": "~ LIMIT CLOSE"
+               }.get(reason, reason)
+    W2 = 46
+    top = f"{col}╔{'═'*W2}╗{_R}"
+    bot = f"{col}╚{'═'*W2}╝{_R}"
+    def row(label, value):
+        inner = f"  {_GRY}{label:<12}{_R}  {value}"
+        plain_len = 2 + 12 + 2 + len(value.replace(_BD,'').replace(_GRN,'').replace(_RED,'').replace(_WHT,'').replace(_GLD,'').replace(_R,''))
+        pad = W2 - plain_len
+        return f"{col}║{_R}{inner}{' '*max(0,pad)}{col}║{_R}"
+    print(f"\n{top}")
+    title = f"  {sym}  "
+    print(f"{col}║{_R}{_BD}{col}{title:<{W2}}{_R}{col}║{_R}")
+    print(f"{col}╠{'═'*W2}╣{_R}")
+    print(row("EXIT PRICE",  f"{_WHT}{_BD}${exit_p:,.2f}{_R}"))
+    print(row("PNL",         f"{col}{_BD}{sign}${abs(pnl):,.2f}{_R}"))
+    print(row("BALANCE",     f"{_WHT}${balance:,.2f}{_R}"))
+    print(row("TRADES",      f"{_WHT}{n}  {_GRY}WR {wr:.0f}%{_R}"))
+    print(f"{bot}\n")
+
 import features as feat_mod
 from sim.execution          import ExecutionEngine
-from sim.binance_portfolio  import BinancePortfolio
+from sim.binance_portfolio  import BinancePortfolio, event_log as _portfolio_log
 from sim.binance_ws_feed    import BinanceWSFeed
 
 logging.basicConfig(
@@ -220,22 +493,79 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
     feed   = BinanceWSFeed(symbol=symbol, ws_url=ws_url)
 
     # ── Banner ────────────────────────────────────────────────────────────────
-    print()
-    print("=" * 62)
-    print("  *** LIVE TRADING – REAL MONEY ON BINANCE FUTURES ***")
-    print(f"  Symbol   : {symbol}")
-    print(f"  Leverage : {portfolio.leverage}x  (position_size_pct in config)")
-    print(f"  Balance  : ${portfolio.capital:,.2f} USDT")
-    print(f"  T_up/dn  : {tc['T_up']} / {tc['T_down']}")
-    print(f"  SL/TP    : {tc.get('sl_pct',0)*100:.2f}% / {tc.get('tp_pct',0)*100:.2f}%")
-    print(f"  Dashboard: http://localhost:8080")
-    print("=" * 62)
-    print("  Ctrl+C to stop gracefully (open position will be closed)")
-    print()
+    W2 = _W + 2
+    print(f"\n{_BDR}{'═'*W2}{_R}")
+    print(f"  {_HDR}{_BD}*** LIVE TRADING  –  REAL MONEY  –  BINANCE FUTURES ***{_R}")
+    print(f"{_BDR}{'─'*W2}{_R}")
+    print(f"  {_GRY}Symbol   {_R}  {_WHT}{_BD}{symbol}{_R}   "
+          f"{_GRY}Leverage{_R}  {_WHT}{_BD}{portfolio.leverage}x{_R}   "
+          f"{_GRY}Balance{_R}  {_GLD}{_BD}${portfolio.capital:,.2f}{_R}")
+    print(f"  {_GRY}SL/TP    {_R}  {_RED}{tc.get('sl_pct',0)*100:.2f}%{_R} / "
+          f"{_GRN}{tc.get('tp_pct',0)*100:.2f}%{_R}   "
+          f"{_GRY}T up/dn  {_R}  {_WHT}{tc['T_up']}{_R} / {_WHT}{tc['T_down']}{_R}   "
+          f"{_GRY}Dashboard{_R}  {_CYN}http://localhost:8080{_R}")
+    print(f"{_BDR}{'═'*W2}{_R}\n")
 
     last_price = 0.0
+    prev_price = 0.0
     last_ts    = None
     cvd_col    = f"cvd_{cfg['features']['cvd_window']}"
+
+    # ── Shared dashboard state (updated each bar, read by background task) ──────
+    _dash: dict = {
+        "ts": None, "price": 0.0, "prev_price": 0.0,
+        "p_up": 0.0, "p_down": 0.0,
+        "skip": "", "bar": 0,
+    }
+
+    def _redraw():
+        if _dash["ts"] is None:
+            return
+        pos     = portfolio.position
+        balance = portfolio.capital
+        equity  = portfolio.mark_to_market(_dash["price"])
+        if pos is not None:
+            status = "LONG" if pos.direction == 1 else "SHORT"
+            skip   = "in_pos"
+        elif portfolio.has_pending:
+            status = "PENDING_LONG" if portfolio.pending_dir == 1 else "PENDING_SHORT"
+            skip   = (f"pending_{'long' if portfolio.pending_dir == 1 else 'short'}"
+                      f"  limit={portfolio.pending_price:.2f}")
+        else:
+            status = "FLAT"
+            skip   = _dash["skip"]
+        nt      = len(portfolio.trade_log)
+        wins    = sum(1 for t in portfolio.trade_log if t.net_pnl > 0)
+        net_pnl = sum(t.net_pnl for t in portfolio.trade_log)
+        _print_dashboard(
+            _dash["ts"], _dash["price"], _dash["prev_price"],
+            _dash["p_up"], _dash["p_down"],
+            balance, equity, pos, status,
+            nt, wins, net_pnl,
+            skip, _dash["bar"], symbol,
+        )
+
+    # ── Background SL/TP guard + dashboard refresh (every 5 s) ───────────────
+    _price_ref = [0.0]
+
+    async def _background_guard():
+        while True:
+            try:
+                await asyncio.sleep(5)
+            except asyncio.CancelledError:
+                return
+            if _price_ref[0] > 0:
+                try:
+                    portfolio.handle_pending_fill_immediate(
+                        sl_pct=tc.get("sl_pct", 0.002),
+                        tp_pct=tc.get("tp_pct", 0.006),
+                    )
+                    portfolio.verify_protection(_price_ref[0])
+                except (Exception, KeyboardInterrupt) as exc:
+                    logger.warning(f"[bg_guard] error: {exc}")
+                _redraw()
+
+    bg_guard_task = asyncio.create_task(_background_guard())
 
     try:
         async for candle in feed:
@@ -245,6 +575,7 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
             buy_v = float(candle.get("taker_buy_vol", vol / 2))
             last_price = price
             last_ts    = ts
+            _price_ref[0] = price
 
             # ── Send candle to browser ────────────────────────────────────────
             c_msg = {
@@ -273,23 +604,23 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
             event  = engine.on_bar(feat_row, probs, ts, price)
 
             p_down, _, p_up = probs
-            equity  = portfolio.mark_to_market(price)
-            balance = portfolio.capital
-            pos     = portfolio.position
-            status  = "FLAT" if pos is None else ("LONG" if pos.direction == 1 else "SHORT")
 
-            # ── Terminal status line ──────────────────────────────────────────
-            unreal_str = ""
-            if pos is not None:
-                unreal     = equity - balance
-                unreal_str = f"  unreal={unreal:+.2f}"
-            print(f"  [{ts}]  {price:>10.2f}  "
-                  f"p_up={p_up:.3f}  p_dn={p_down:.3f}  "
-                  f"pos={status:5s}  "
-                  f"bal=${balance:>10,.2f}  eq=${equity:>10,.2f}{unreal_str}"
-                  f"  | {engine.last_skip_reason}")
+            # ── Update shared state + redraw dashboard ────────────────────────
+            _dash["ts"]         = ts
+            _dash["prev_price"] = _dash["price"]
+            _dash["price"]      = price
+            _dash["p_up"]       = float(p_up)
+            _dash["p_down"]     = float(p_down)
+            _dash["skip"]       = engine.last_skip_reason
+            _dash["bar"]        = engine.bar_count
+            prev_price          = _dash["prev_price"]
+            _redraw()
 
             # ── Browser stats ─────────────────────────────────────────────────
+            pos     = portfolio.position
+            balance = portfolio.capital
+            equity  = portfolio.mark_to_market(price)
+            status  = "FLAT" if pos is None else ("LONG" if pos.direction == 1 else "SHORT")
             n_trades = len(portfolio.trade_log)
             wins     = sum(1 for t in portfolio.trade_log if t.net_pnl > 0)
             stats: dict = {
@@ -321,16 +652,8 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
                 ev_type = event.get("event", "")
 
                 if ev_type == "OPEN" and portfolio.position is not None:
-                    pos2     = portfolio.position
-                    size_usd = pos2.size * pos2.entry_price
-                    print(f"\n  {'='*58}")
-                    print(f"  ENTRY  {event.get('direction'):5s}  @ {pos2.entry_price:.2f}")
-                    print(f"    SL   : {pos2.sl_price:.2f}  "
-                          f"({abs(pos2.entry_price - pos2.sl_price):.2f} pts)")
-                    print(f"    TP   : {pos2.tp_price:.2f}  "
-                          f"({abs(pos2.tp_price - pos2.entry_price):.2f} pts)")
-                    print(f"    Size : {pos2.size:.6f} {symbol[:3]}  (${size_usd:,.2f})")
-                    print(f"  {'='*58}\n")
+                    pos2 = portfolio.position
+                    _print_trade_open(pos2, event.get("direction", ""), float(p_up), float(p_down), symbol)
 
                     await _broadcast({
                         "type":      "trade_open",
@@ -346,19 +669,14 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
                     })
 
                 elif ev_type == "CLOSE":
-                    pnl      = event.get("net_pnl", 0)
-                    reason   = event.get("reason", "")
-                    pnl_sign = "+" if pnl >= 0 else ""
-                    nt       = len(portfolio.trade_log)
-                    wins2    = sum(1 for t in portfolio.trade_log if t.net_pnl > 0)
-                    wr       = f"{wins2/nt*100:.0f}%" if nt else "n/a"
-                    exit_p   = event.get("exit_price", price)
-                    print(f"\n  {'='*58}")
-                    print(f"  EXIT   {reason:6s} @ {exit_p:.2f}  "
-                          f"PnL: {pnl_sign}${pnl:.2f}")
-                    print(f"    New balance : ${portfolio.capital:,.2f}")
-                    print(f"    Total trades: {nt}   Win rate: {wr}")
-                    print(f"  {'='*58}\n")
+                    pnl    = event.get("net_pnl", 0)
+                    reason = event.get("reason", "")
+                    exit_p = event.get("exit_price", price)
+                    nt     = len(portfolio.trade_log)
+                    wins2  = sum(1 for t in portfolio.trade_log if t.net_pnl > 0)
+                    wr     = wins2 / nt * 100 if nt else 0.0
+                    _print_trade_close(reason, float(exit_p), float(pnl),
+                                       portfolio.capital, nt, wr)
 
                     last_t = portfolio.trade_log[-1] if portfolio.trade_log else None
                     await _broadcast({
@@ -378,27 +696,75 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
     except (asyncio.CancelledError, KeyboardInterrupt):
         pass
     finally:
+        bg_guard_task.cancel()
+        try:
+            await bg_guard_task
+        except (asyncio.CancelledError, KeyboardInterrupt, Exception):
+            pass
         await feed.stop()
 
-        if portfolio.position is not None:
-            print("\n  Ctrl+C detected – closing open position ...")
-            print(f"  Position: {'LONG' if portfolio.position.direction == 1 else 'SHORT'}"
-                  f"  entry={portfolio.position.entry_price:.2f}"
-                  f"  size={portfolio.position.size}"
-                  f"  last_price={last_price:.2f}")
-            if last_price <= 0:
-                print("  WARNING: last_price=0, fetching current price from Binance ...")
+        if portfolio.has_pending:
+            oid = portfolio._pending_entry_order_id
+            print(f"\n{_GLD}  Cancelling pending limit entry order (id={oid}) ...{_R}")
+            import time as _t
+            for _att in range(1, 13):   # retry every 5 s for up to 1 min
                 try:
-                    ticker = portfolio._client.futures_symbol_ticker(symbol=symbol)
-                    last_price = float(ticker["price"])
-                    print(f"  Current price fetched: {last_price:.2f}")
-                except Exception as fe:
-                    print(f"  Price fetch failed: {fe}")
-            try:
-                engine.force_close(last_price, last_ts or "shutdown")
-                print("  Position closed successfully.")
-            except Exception as ce:
-                print(f"  force_close ERROR: {ce}")
+                    if oid:
+                        portfolio._client.futures_cancel_order(
+                            symbol=portfolio.symbol, orderId=oid)
+                    portfolio.pending_dir             = 0
+                    portfolio.pending_price           = 0.0
+                    portfolio.pending_bar             = 0
+                    portfolio._pending_entry_order_id = None
+                    portfolio._pending_qty            = 0.0
+                    portfolio._limit_entry_filled     = False
+                    print(f"  {_GRN}Limit order cancelled.{_R}")
+                    break
+                except Exception as _ce:
+                    print(f"  {_RED}Cancel attempt {_att}/12 FAILED: {_ce} – retry in 5 s{_R}")
+                    _t.sleep(5)
+
+        if portfolio.position is not None:
+            pos = portfolio.position
+            dir_str = "LONG" if pos.direction == 1 else "SHORT"
+            print(f"\n  Ctrl+C – closing {dir_str} position "
+                  f"entry={pos.entry_price:.2f}  size={pos.size}")
+
+            # Step 1: cancel all SL/TP orders so they don't race the close
+            portfolio._cancel_all_orders()
+
+            # Step 2: market close – retry every 5 s for up to 10 min
+            side_close = "SELL" if pos.direction == 1 else "BUY"
+            closed = False
+            max_attempts = 120   # 120 × 5 s = 10 min
+            for att in range(1, max_attempts + 1):
+                try:
+                    resp = portfolio._client.futures_create_order(
+                        symbol    = portfolio.symbol,
+                        side      = side_close,
+                        type      = "MARKET",
+                        quantity  = portfolio._rq(pos.size),
+                        reduceOnly= "true",
+                    )
+                    fill = float(resp.get("avgPrice") or 0)
+                    print(f"  Closed @ {fill:.2f}  (attempt {att})")
+                    closed = True
+                    break
+                except Exception as ce:
+                    # -2022 = reduceOnly rejected (position already gone – SL/TP fired)
+                    if "-2022" in str(ce) or "reduceOnly" in str(ce).lower():
+                        print(f"  Position already closed on exchange (SL/TP fired).")
+                        closed = True
+                        break
+                    print(f"  Close attempt {att}/{max_attempts} FAILED: {ce}  – retrying in 5 s ...")
+                    await asyncio.sleep(5)
+
+            if closed:
+                portfolio.position = None
+                print("  Shutdown complete.")
+            else:
+                print("  WARNING: Could not close position after 10 min of retries!")
+                print("  Check Binance manually – SL/TP orders were cancelled.")
         else:
             print("\n  No open position on exit.")
 

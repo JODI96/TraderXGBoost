@@ -58,7 +58,8 @@ class Portfolio:
     cooldown_bars    : bars to wait after a trade closes before next entry
     """
     initial_capital: float = 10_000.0
-    cost_rt:         float = 0.0018
+    maker_fee:       float = 0.0002   # entry (limit) + TP/SL exit (limit)
+    taker_fee:       float = 0.00056  # TIME/FORCE exit (market)
     cooldown_bars:   int   = 3
 
     # Runtime state (not __init__ params)
@@ -68,6 +69,13 @@ class Portfolio:
     equity_curve: list[float]      = field(init=False, default_factory=list)
     bar_count:    int              = field(init=False, default=0)
     _cooldown_rem: int             = field(init=False, default=0)
+    # Pending limit open order state
+    pending_dir:   int   = field(init=False, default=0)   # 0=none +1=long -1=short
+    pending_price: float = field(init=False, default=0.0)
+    pending_bar:   int   = field(init=False, default=0)
+    # Pending limit close order state (time-stop → limit before market fallback)
+    pending_close_price:    float = field(init=False, default=0.0)
+    pending_close_attempts: int   = field(init=False, default=0)
 
     def __post_init__(self):
         self.capital = self.initial_capital
@@ -82,14 +90,45 @@ class Portfolio:
         return self._cooldown_rem > 0
 
     @property
+    def has_pending(self) -> bool:
+        return self.pending_dir != 0
+
+    @property
+    def has_pending_close(self) -> bool:
+        return self.pending_close_price != 0.0
+
+    @property
     def can_enter(self) -> bool:
-        return self.is_flat and not self.in_cooldown
+        return self.is_flat and not self.in_cooldown and not self.has_pending
 
     def mark_to_market(self, price: float) -> float:
         """Current total value including unrealised P&L."""
         if self.position:
             return self.capital + self.position.unrealised_pnl(price)
         return self.capital
+
+    # ── Pending limit order ───────────────────────────────────────────────────
+    def place_pending_order(self, direction: int, limit_price: float) -> None:
+        self.pending_dir   = direction
+        self.pending_price = limit_price
+        self.pending_bar   = self.bar_count
+
+    def cancel_pending_order(self) -> None:
+        self.pending_dir   = 0
+        self.pending_price = 0.0
+        self.pending_bar   = 0
+
+    def place_pending_close(self, close_price: float) -> None:
+        self.pending_close_price    = close_price
+        self.pending_close_attempts = 1
+
+    def update_pending_close(self, close_price: float) -> None:
+        self.pending_close_price     = close_price
+        self.pending_close_attempts += 1
+
+    def clear_pending_close(self) -> None:
+        self.pending_close_price    = 0.0
+        self.pending_close_attempts = 0
 
     # ── Position management ───────────────────────────────────────────────────
     def open_trade(
@@ -103,8 +142,9 @@ class Portfolio:
         timestamp: str,
         sl_pct: float | None = None,
         tp_pct: float | None = None,
+        entry_bar: int | None = None,   # override for limit-fill (counts from signal bar)
     ) -> None:
-        if not self.can_enter:
+        if self.position is not None or self.in_cooldown:
             raise RuntimeError("Cannot open trade: position open or in cooldown.")
         size = (self.capital * pos_pct) / (price + 1e-9)
         if sl_pct is not None and tp_pct is not None:
@@ -120,9 +160,10 @@ class Portfolio:
             tp_price     = tp_price,
             size         = size,
             entry_ts     = str(timestamp),
-            entry_bar    = self.bar_count,
+            entry_bar    = entry_bar if entry_bar is not None else self.bar_count,
             atr_at_entry = atr,
         )
+        self.cancel_pending_order()
 
     def close_trade(
         self,
@@ -134,7 +175,9 @@ class Portfolio:
             raise RuntimeError("No open position to close.")
         pos        = self.position
         raw_pnl    = pos.unrealised_pnl(price)
-        cost_pnl   = pos.entry_price * pos.size * self.cost_rt
+        # TP/SL/LIMIT_CLOSE: limit orders both sides (maker+maker); TIME/FORCE: market exit
+        exit_fee   = self.maker_fee if reason in ("TP", "SL", "LIMIT_CLOSE") else self.taker_fee
+        cost_pnl   = pos.entry_price * pos.size * (self.maker_fee + exit_fee)
         net_pnl    = raw_pnl - cost_pnl
         self.capital += net_pnl
 
@@ -155,6 +198,7 @@ class Portfolio:
         self.trade_log.append(trade)
         self.position      = None
         self._cooldown_rem = self.cooldown_bars
+        self.clear_pending_close()
         return trade
 
     # ── Bar update (call once per new closed candle) ──────────────────────────
