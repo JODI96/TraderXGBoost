@@ -121,8 +121,11 @@ def run_backtest(
     capital0  = tc["initial_capital"]
     pos_pct   = tc["position_size_pct"]
 
-    cost_rt = (lc["maker_fee"] + lc["taker_fee"] +
-               lc["slippage"]  + lc["spread"]) * 2
+    limit_offset  = tc.get("limit_entry_offset_pct", 0.00005)
+    maker_fee     = lc["maker_fee"]
+    taker_fee     = lc["taker_fee"]
+    cost_rt_limit = maker_fee * 2                  # entry(maker) + TP/SL exit(maker)
+    cost_rt_time  = maker_fee + taker_fee          # entry(maker) + TIME exit(market)
 
     n      = len(df_feat)
     close  = df_feat["close"].values
@@ -158,6 +161,11 @@ def run_backtest(
     tp_price     = 0.0
     pos_size     = 0.0        # units of base asset
     cooldown_rem = 0
+    pending_dir   = 0         # 0=none, 1=long pending, -1=short pending
+    pending_price = 0.0
+    pending_bar   = 0
+    pending_close_price    = 0.0
+    pending_close_attempts = 0
 
     trades: list[dict] = []
     equity = np.full(n, capital0, dtype=np.float64)
@@ -180,90 +188,114 @@ def run_backtest(
         if pos_dir != 0:
             time_held = i - entry_idx
             h, l      = high[i], low[i]
-            # Use intrabar high/low so SL/TP fire as soon as price touches level
-            hit_sl    = (pos_dir == 1  and l <= sl_price) or \
-                        (pos_dir == -1 and h >= sl_price)
-            hit_tp    = (pos_dir == 1  and h >= tp_price) or \
-                        (pos_dir == -1 and l <= tp_price)
-            hit_time  = time_held >= time_stop
+            hit_sl = (pos_dir == 1  and l <= sl_price) or \
+                     (pos_dir == -1 and h >= sl_price)
+            hit_tp = (pos_dir == 1  and h >= tp_price) or \
+                     (pos_dir == -1 and l <= tp_price)
 
-            if hit_sl or hit_tp or hit_time:
-                # Exit at exact SL/TP level; time-stop exits at close
-                if hit_sl:
-                    exit_p = sl_price
-                elif hit_tp:
-                    exit_p = tp_price
-                else:
-                    exit_p = c
-                raw_pnl = ((exit_p - entry_price) * pos_dir * pos_size)
-                cost_pnl = entry_price * pos_size * cost_rt
+            def _close(exit_p, reason, cost):
+                nonlocal capital, pos_dir, cooldown_rem
+                nonlocal pending_close_price, pending_close_attempts
+                raw_pnl  = (exit_p - entry_price) * pos_dir * pos_size
+                cost_pnl = entry_price * pos_size * cost
                 net_pnl  = raw_pnl - cost_pnl
                 capital += net_pnl
                 equity[i] = capital
-
                 trades.append({
-                    "entry_idx": entry_idx,
-                    "exit_idx":  i,
-                    "entry_ts":  df_feat.index[entry_idx],
-                    "exit_ts":   df_feat.index[i],
-                    "direction": "LONG" if pos_dir == 1 else "SHORT",
-                    "entry_price": entry_price,
-                    "exit_price":  exit_p,
+                    "entry_idx":   entry_idx,   "exit_idx":   i,
+                    "entry_ts":    df_feat.index[entry_idx],
+                    "exit_ts":     df_feat.index[i],
+                    "direction":   "LONG" if pos_dir == 1 else "SHORT",
+                    "entry_price": entry_price, "exit_price": exit_p,
                     "size":        pos_size,
                     "raw_pnl":     round(raw_pnl,  2),
                     "cost":        round(cost_pnl, 2),
                     "net_pnl":     round(net_pnl,  2),
                     "time_held":   time_held,
-                    "exit_reason": "SL" if hit_sl else ("TP" if hit_tp else "TIME"),
+                    "exit_reason": reason,
                 })
-                pos_dir      = 0
+                pos_dir = 0
                 cooldown_rem = cooldown
+                pending_close_price    = 0.0
+                pending_close_attempts = 0
+
+            # SL/TP: priority — both use limit (maker) fee
+            if hit_sl or hit_tp:
+                exit_p = sl_price if hit_sl else tp_price
+                _close(exit_p, "SL" if hit_sl else "TP", cost_rt_limit)
+
+            # Pending limit close: check fill / retry / market fallback
+            elif pending_close_price != 0.0:
+                filled = (pos_dir == 1  and l <= pending_close_price) or \
+                         (pos_dir == -1 and h >= pending_close_price)
+                if filled:
+                    _close(pending_close_price, "LIMIT_CLOSE", cost_rt_limit)
+                elif pending_close_attempts >= 3:
+                    _close(c, "TIME", cost_rt_time)
+                else:
+                    pending_close_attempts += 1
+                    pending_close_price = (c * (1.0 - limit_offset) if pos_dir == 1
+                                          else c * (1.0 + limit_offset))
+
+            # Time-stop fires: initiate limit close
+            elif time_held >= time_stop:
+                pending_close_price    = (c * (1.0 - limit_offset) if pos_dir == 1
+                                         else c * (1.0 + limit_offset))
+                pending_close_attempts = 1
+
+        # ── Check pending limit order fill / expiry ───────────────────────────
+        if pending_dir != 0:
+            pending_age = i - pending_bar
+            filled = (
+                (pending_dir == 1  and low[i]  <= pending_price) or
+                (pending_dir == -1 and high[i] >= pending_price)
+            )
+            if pending_age >= time_stop:
+                pending_dir = 0                 # expired, cancel silently
+            elif filled:
+                entry_price = pending_price
+                pos_size    = (capital * pos_pct) / (entry_price + 1e-9)
+                if use_pct:
+                    sl_price = entry_price * (1.0 - pending_dir * sl_pct)
+                    tp_price = entry_price * (1.0 + pending_dir * tp_pct)
+                else:
+                    sl_price = entry_price - pending_dir * sl_atr * atr[i]
+                    tp_price = entry_price + pending_dir * tp_atr * atr[i]
+                pos_dir     = pending_dir
+                entry_idx   = pending_bar       # time stop counts from signal bar
+                pending_dir = 0
 
         if cooldown_rem > 0:
             cooldown_rem -= 1
             continue
 
         # ── Entry logic ───────────────────────────────────────────────────────
-        if pos_dir == 0:
+        if pos_dir == 0 and pending_dir == 0:
             sq_ok   = (not req_sq) or sq_col[i] == 1
             vol_ok  = vol_regime[i] >= min_vol
             ema_ok  = ema9_21_diff[i] >= min_ema9_21
 
-            # LONG: imminent up-breakout
+            # LONG: place limit buy below current price
             if (p_up[i] >= T_u and
                     not np.isnan(dist_rh[i]) and dist_rh[i] <= dmax and
                     sq_ok and vol_ok and ema_ok):
-                entry_price  = c
-                pos_size     = (capital * pos_pct) / (c + 1e-9)
-                if use_pct:
-                    sl_price = entry_price * (1.0 - sl_pct)
-                    tp_price = entry_price * (1.0 + tp_pct)
-                else:
-                    sl_price = entry_price - sl_atr * atr[i]
-                    tp_price = entry_price + tp_atr * atr[i]
-                pos_dir      = 1
-                entry_idx    = i
+                pending_price = c * (1.0 - limit_offset)
+                pending_dir   = 1
+                pending_bar   = i
 
-            # SHORT: imminent down-breakout
+            # SHORT: place limit sell above current price
             elif (p_down[i] >= T_d and
                     not np.isnan(dist_rl[i]) and dist_rl[i] <= dmax and
                     sq_ok and vol_ok and ema_ok):
-                entry_price  = c
-                pos_size     = (capital * pos_pct) / (c + 1e-9)
-                if use_pct:
-                    sl_price = entry_price * (1.0 + sl_pct)
-                    tp_price = entry_price * (1.0 - tp_pct)
-                else:
-                    sl_price = entry_price + sl_atr * atr[i]
-                    tp_price = entry_price - tp_atr * atr[i]
-                pos_dir      = -1
-                entry_idx    = i
+                pending_price = c * (1.0 + limit_offset)
+                pending_dir   = -1
+                pending_bar   = i
 
-    # Close any open trade at end
+    # Close any open trade at end (market order)
     if pos_dir != 0:
         exit_p   = close[-1]
         raw_pnl  = (exit_p - entry_price) * pos_dir * pos_size
-        cost_pnl = entry_price * pos_size * cost_rt
+        cost_pnl = entry_price * pos_size * cost_rt_time
         net_pnl  = raw_pnl - cost_pnl
         capital += net_pnl
         trades.append({

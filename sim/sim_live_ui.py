@@ -186,11 +186,10 @@ async def _trading_loop(cfg: dict, symbol: str, ws_port: int) -> None:
     model, feat_cols = _load_artifacts(art_dir)
 
     # Portfolio + execution engine
-    cost_rt = (lc["maker_fee"] + lc["taker_fee"] +
-               lc["slippage"]  + lc["spread"]) * 2
     portfolio   = Portfolio(
         initial_capital = tc["initial_capital"],
-        cost_rt         = cost_rt,
+        maker_fee       = lc["maker_fee"],
+        taker_fee       = lc["taker_fee"],
         cooldown_bars   = tc["cooldown"],
     )
     engine      = ExecutionEngine(cfg, portfolio, log_file)

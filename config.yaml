@@ -60,8 +60,8 @@ labels:
   rr_ratio:  3         # (ATR-mode fallback) TP = sl_atr * rr_ratio * ATR
 
   # Round-trip trading costs (as fractions). Used to filter unprofitable labels.
-  maker_fee:  0.0002   # fee per leg for limit orders (0.02%)               [range: 0.0001–0.001]
-  taker_fee:  0.0000   # fee per leg for market orders                      [range: 0.0–0.001]
+  maker_fee:  0.00023   # fee per leg for limit orders (0.02% Binance futures maker) [range: 0.0–0.001]
+  taker_fee:  0.00053   # fee per leg for market orders                      [range: 0.0–0.001]
   slippage:   0.0000   # expected slippage per leg                          [range: 0.0–0.001]
   spread:     0.0000   # bid-ask spread cost                                [range: 0.0–0.001]
 
@@ -230,6 +230,10 @@ trading:
   cooldown:        5      # bars to wait after a trade closes                [range: 0–60]
                            # 5 bars = 5-minute cooldown between trades
                            # decrease → more trades, can re-enter immediately
+
+  limit_entry_offset_pct: 0.00005  # limit order offset from current price (0.005%)
+                                   # LONG: buy limit at price*(1-offset); SHORT: sell limit at price*(1+offset)
+                                   # small enough to fill within 1-2 bars; earns maker fee instead of taker
 
   max_positions:   1      # maximum simultaneous open trades; keep at 1 for single-position mode
   initial_capital: 1000.0  # starting capital in USD

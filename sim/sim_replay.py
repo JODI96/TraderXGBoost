@@ -65,12 +65,10 @@ def run_replay(cfg: dict, args) -> None:
     # ── Build engine objects ──────────────────────────────────────────────────
     lc      = cfg["labels"]
     tc      = cfg["trading"]
-    cost_rt = (lc["maker_fee"] + lc["taker_fee"] +
-               lc["slippage"]  + lc["spread"]) * 2
-
     portfolio = Portfolio(
         initial_capital = tc["initial_capital"],
-        cost_rt         = cost_rt,
+        maker_fee       = lc["maker_fee"],
+        taker_fee       = lc["taker_fee"],
         cooldown_bars   = tc["cooldown"],
     )
     engine   = ExecutionEngine(cfg, portfolio, log_file)
