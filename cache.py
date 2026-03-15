@@ -27,8 +27,9 @@ from pathlib import Path
 import pandas as pd
 import sys
 
-ROOT      = Path(__file__).resolve().parent
-CACHE_DIR = ROOT / "models" / "tuning" / "cache"
+ROOT          = Path(__file__).resolve().parent
+CACHE_DIR     = ROOT / "models" / "tuning" / "cache"
+CACHE_VERSION = "v2"   # bump to invalidate all cache files
 
 # Add project root so this module can be imported from anywhere
 if str(ROOT) not in sys.path:
@@ -72,7 +73,7 @@ def load_coin_year(coin: str, year: int, cfg: dict,
 
     _ensure_cache_dir()
     h          = feat_label_hash(cfg)
-    cache_path = CACHE_DIR / f"{coin}_{year}_{h}.pkl"
+    cache_path = CACHE_DIR / f"{CACHE_VERSION}_{coin}_{year}_{h}.pkl"
 
     if not no_cache and cache_path.exists():
         print(f"  [cache] {coin} {year} <- {cache_path.name}")
@@ -96,9 +97,9 @@ def load_coin_year(coin: str, year: int, cfg: dict,
     feat_cols = feat_mod.get_feature_columns(cfg)
     avail     = [c for c in feat_cols if c in df_feat.columns]
 
-    # Join all feature cols (including atr_short, dist_rh_20 etc.) + label.
-    # Drop only rows where the label is NaN (last H_horizon bars).
-    df_all = (df_feat[avail]
+    # Store FULL df_feat (all columns including close/high/low/open which
+    # run_backtest reads directly) + label.  Drop only NaN-label rows.
+    df_all = (df_feat
               .join(df_lab[["label"]], how="inner")
               .dropna(subset=["label"]))
     df_all["label"] = df_all["label"].astype(int)
@@ -153,7 +154,7 @@ def load_training_data(cfg: dict, no_cache: bool = False) -> dict:
 
     coin_str   = "-".join(sorted(str(c) for c in coins))
     year_str   = "-".join(str(y) for y in sorted(years))
-    cache_path = CACHE_DIR / f"train_{coin_str}_{year_str}_{h}.pkl"
+    cache_path = CACHE_DIR / f"{CACHE_VERSION}_train_{coin_str}_{year_str}_{h}.pkl"
 
     if not no_cache and cache_path.exists():
         print(f"  [cache] Training data <- {cache_path.name}")

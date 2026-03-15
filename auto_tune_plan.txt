@@ -258,6 +258,7 @@ Plan: auto_tune.py — Deep Analysis + Auto-Tuner                               
 
   # Fast tuning: 100 trials, ~seconds each
   ./trader2/Scripts/python.exe auto_tune.py --mode fast --trials 100
+  ./trader2/Scripts/python.exe auto_tune.py --mode fast --trials 100 --jobs 3
 
   # Resume interrupted run
   ./trader2/Scripts/python.exe auto_tune.py --resume --trials 100

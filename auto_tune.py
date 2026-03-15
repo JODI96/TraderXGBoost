@@ -41,6 +41,7 @@ import os
 import pickle
 import random
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -357,7 +358,8 @@ def auto_tune(years_data: dict[int, tuple],
               n_trials: int = 100,
               mode: str = "fast",
               resume: bool = False,
-              no_cache: bool = False) -> dict:
+              no_cache: bool = False,
+              n_jobs: int = 1) -> dict:
     """
     Optuna-based tuner (random search fallback if Optuna not installed).
     fast: tune T_up/T_down only — probs pre-computed, ~seconds/trial.
@@ -383,6 +385,7 @@ def auto_tune(years_data: dict[int, tuple],
     best_params: dict = {}
     best_model  = model_base
     trial_counter = [0]
+    _lock = threading.Lock()   # protects shared state in parallel trials
 
     # ── Objectives ────────────────────────────────────────────────────────────
     def objective_fast(trial) -> float:
@@ -440,7 +443,7 @@ def auto_tune(years_data: dict[int, tuple],
                 break
         return _score(reports), reports, m
 
-    # ── Wrapped objective (logging + best tracking) ───────────────────────────
+    # ── Wrapped objective (logging + best tracking, thread-safe) ─────────────
     def wrapped_objective(trial) -> float:
         nonlocal best_score, best_params, best_model
         t0 = time.time()
@@ -451,24 +454,26 @@ def auto_tune(years_data: dict[int, tuple],
         else:
             sc, reports, m = objective_full(trial)
             params = dict(trial.params)
-            if sc > best_score:
-                best_model = m
 
-        trial_counter[0] += 1
-        tn = trial_counter[0]
-        _append_trial(tn, params, sc, reports)
-
-        def _pf(yr): return reports.get(yr, {}).get("profit_factor", 0.0)
         elapsed = time.time() - t0
-        print(f"  trial {tn:>4}  score={sc:.4f}  "
-              f"PF 23={_pf(2023):.2f}  24={_pf(2024):.2f}  25={_pf(2025):.2f}  "
-              f"T_up={params.get('T_up', 0):.3f}  T_dn={params.get('T_down', 0):.3f}"
-              f"  ({elapsed:.1f}s)")
 
-        if sc > best_score:
-            best_score  = sc
-            best_params = dict(params)
-            _save_best(best_model, feat_cols, params, sc, reports)
+        with _lock:
+            trial_counter[0] += 1
+            tn = trial_counter[0]
+            _append_trial(tn, params, sc, reports)
+
+            def _pf(yr): return reports.get(yr, {}).get("profit_factor", 0.0)
+            print(f"  trial {tn:>4}  score={sc:.4f}  "
+                  f"PF 23={_pf(2023):.2f}  24={_pf(2024):.2f}  25={_pf(2025):.2f}  "
+                  f"T_up={params.get('T_up', 0):.3f}  T_dn={params.get('T_down', 0):.3f}"
+                  f"  ({elapsed:.1f}s)")
+
+            if sc > best_score:
+                best_score  = sc
+                best_params = dict(params)
+                if mode == "full":
+                    best_model = m
+                _save_best(best_model, feat_cols, params, sc, reports)
 
         return sc
 
@@ -493,7 +498,7 @@ def auto_tune(years_data: dict[int, tuple],
             print(f"  [optuna] Starting study (DB: {db_path.name}).")
 
         study.optimize(wrapped_objective, n_trials=n_trials,
-                       show_progress_bar=False)
+                       n_jobs=n_jobs, show_progress_bar=False)
         best_params = study.best_trial.params
         best_score  = study.best_trial.value
 
@@ -594,6 +599,8 @@ def main() -> None:
     parser.add_argument("--no-cache",      action="store_true")
     parser.add_argument("--year",          type=int, default=None,
                         help="backtest years to analyze (default: 2023 2024 2025)")
+    parser.add_argument("--jobs",          type=int, default=1,
+                        help="parallel Optuna trials (fast mode only, default: 1)")
     parser.add_argument("--config",        default="config.yaml")
     args = parser.parse_args()
 
@@ -663,6 +670,7 @@ def main() -> None:
         mode       = args.mode,
         resume     = args.resume,
         no_cache   = args.no_cache,
+        n_jobs     = args.jobs if args.mode == "fast" else 1,
     )
 
     # ── Phase 6: Final report ─────────────────────────────────────────────────

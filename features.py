@@ -433,14 +433,8 @@ def compute_features(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
             except Exception as exc:
                 print(f"[features] MTF {suffix} failed: {exc}")
 
-    # ── H: Volume Profile (POC / VAH / VAL) ──────────────────────────────────
-    for vp_lb in fc.get("range_lookbacks", [20, 60]):
-        _pd, _vhd, _vld, _pvr, _iva = _compute_vp(df, vp_lb, atr_short)
-        df[f"poc_dist_{vp_lb}"]      = _pd    # (close - POC)  / ATR
-        df[f"vah_dist_{vp_lb}"]      = _vhd   # (close - VAH)  / ATR
-        df[f"val_dist_{vp_lb}"]      = _vld   # (close - VAL)  / ATR
-        df[f"poc_vol_ratio_{vp_lb}"] = _pvr   # volume concentration at POC
-        df[f"in_value_area_{vp_lb}"] = _iva   # 1 if price inside value area
+    # ── H: Volume Profile — removed (all features < 0.2% gain, pure Python
+    #        loop over 525k bars was the dominant compute bottleneck)
 
     # ── J: 30-min Trend Filter ────────────────────────────────────────────────
     t30w = fc.get("trend30_window",       30)
