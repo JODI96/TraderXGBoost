@@ -1,0 +1,27 @@
+{
+  "score": 0.0,
+  "params": {
+    "T_up": 0.7216020355137747,
+    "T_down": 0.6301961989663103,
+    "break_weight": 16.330564506960204,
+    "max_depth": 7,
+    "min_child_weight": 18,
+    "subsample": 0.8871280486318545,
+    "colsample_bytree": 0.49369321820874146,
+    "gamma": 0.7432862722799422,
+    "reg_alpha": 6.246099996652741,
+    "reg_lambda": 6.969878138664759,
+    "learning_rate": 0.008209463245168675,
+    "k_atr": 12,
+    "H_horizon": 17,
+    "L_range": 25,
+    "L_atr": 12,
+    "sl_pct": 0.0013672431522349648,
+    "rr_ratio": 2.6809210307954294
+  },
+  "year_reports": {
+    "2023": {
+      "error": "no trades"
+    }
+  }
+}

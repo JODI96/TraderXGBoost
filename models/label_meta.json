@@ -1,52 +1,52 @@
 {
-  "train_rows": 5048218,
-  "test_rows": 1262055,
+  "train_rows": 5046000,
+  "test_rows": 1261500,
   "train_start": "2022-01-01 05:15:00+00:00",
-  "train_end": "2025-03-14 20:03:00+00:00",
-  "test_start": "2025-03-14 20:03:00+00:00",
+  "train_end": "2025-03-14 23:19:00+00:00",
+  "test_start": "2025-03-14 23:20:00+00:00",
   "test_end": "2025-12-31 23:39:00+00:00",
-  "n_estimators": 2929,
-  "n_features": 133,
-  "test_logloss": 0.5908456880877898,
+  "n_estimators": 2744,
+  "n_features": 118,
+  "test_logloss": 0.5923948121470477,
   "fold_metrics": [
     {
       "fold": 0,
-      "n_rounds": 717,
-      "val_logloss": 0.7001,
-      "f1_DOWN": 0.1655,
-      "f1_UP": 0.155,
-      "f1_macro": 0.3885
+      "n_rounds": 793,
+      "val_logloss": 0.7011,
+      "f1_DOWN": 0.1646,
+      "f1_UP": 0.1559,
+      "f1_macro": 0.3879
     },
     {
       "fold": 1,
-      "n_rounds": 2136,
-      "val_logloss": 0.6198,
-      "f1_DOWN": 0.1755,
+      "n_rounds": 2124,
+      "val_logloss": 0.6189,
+      "f1_DOWN": 0.1752,
       "f1_UP": 0.1587,
-      "f1_macro": 0.4031
-    },
-    {
-      "fold": 2,
-      "n_rounds": 2929,
-      "val_logloss": 0.5773,
-      "f1_DOWN": 0.1638,
-      "f1_UP": 0.1611,
-      "f1_macro": 0.4037
-    },
-    {
-      "fold": 3,
-      "n_rounds": 1897,
-      "val_logloss": 0.6282,
-      "f1_DOWN": 0.1734,
-      "f1_UP": 0.1631,
       "f1_macro": 0.4035
     },
     {
+      "fold": 2,
+      "n_rounds": 2744,
+      "val_logloss": 0.5791,
+      "f1_DOWN": 0.1637,
+      "f1_UP": 0.1608,
+      "f1_macro": 0.4033
+    },
+    {
+      "fold": 3,
+      "n_rounds": 1616,
+      "val_logloss": 0.6294,
+      "f1_DOWN": 0.1727,
+      "f1_UP": 0.1625,
+      "f1_macro": 0.4032
+    },
+    {
       "fold": 4,
-      "n_rounds": 2136,
-      "val_logloss": 0.6181,
-      "f1_DOWN": 0.1695,
-      "f1_UP": 0.1527,
+      "n_rounds": 2276,
+      "val_logloss": 0.6167,
+      "f1_DOWN": 0.1703,
+      "f1_UP": 0.152,
       "f1_macro": 0.3993
     }
   ],
@@ -59,8 +59,8 @@
     "tp_pct": 0.0045,
     "sl_atr": 2,
     "rr_ratio": 3,
-    "maker_fee": 0.0002,
-    "taker_fee": 0.0,
+    "maker_fee": 0.00023,
+    "taker_fee": 0.00053,
     "slippage": 0.0,
     "spread": 0.0,
     "n_classes": 3

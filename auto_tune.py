@@ -287,25 +287,30 @@ _TRIAL_FIELDS = [
     "break_weight", "max_depth", "min_child_weight",
     "subsample", "colsample_bytree", "gamma",
     "reg_alpha", "reg_lambda", "learning_rate",
+    "k_atr", "H_horizon", "L_range", "L_atr", "sl_pct", "rr_ratio",
 ]
 
 
-def _score(reports: dict[int, dict], min_trades: int = 30) -> float:
-    """mean_PF * mean_Sharpe; 0 if any year fails PF < 1.0 or trades < min."""
-    pfs, sharpes = [], []
-    for rep in reports.values():
+def _score(reports: dict[int, dict], min_trades: int = 60,
+           max_pf_spread: float = 1.0) -> float:
+    """Average profit factor across all years (equal weight).
+    Zero if any year fails PF < 1.0 or trades < min.
+    Zero if max(PF) - min(PF) across years exceeds max_pf_spread — keeps all
+    years in a consistent range rather than letting one year dominate."""
+    pfs = []
+    for yr, rep in reports.items():
         if "error" in rep:
             return 0.0
         pf = rep["profit_factor"]
         n  = rep["n_trades"]
-        sh = rep["sharpe_ratio"]
         if pf < 1.0 or n < min_trades:
             return 0.0
         pfs.append(pf)
-        sharpes.append(sh)
     if not pfs:
         return 0.0
-    return (sum(pfs) / len(pfs)) * max(sum(sharpes) / len(sharpes), 0.0)
+    if max(pfs) - min(pfs) > max_pf_spread:
+        return 0.0
+    return sum(pfs) / len(pfs)
 
 
 def _append_trial(trial_num: int, params: dict, score: float,
@@ -341,6 +346,9 @@ def _save_best(model: xgb.Booster, feat_cols: list[str], params: dict,
         json.dump({
             "T_up":    params["T_up"],
             "T_down":  params["T_down"],
+            "sl_pct":  params.get("sl_pct"),
+            "tp_pct":  params.get("sl_pct", 0) * params.get("rr_ratio", 3.0)
+                       if params.get("sl_pct") else None,
             "classes": {0: "DOWN_BREAK_SOON", 1: "NO_BREAK", 2: "UP_BREAK_SOON"},
         }, f, indent=2)
     with open(BEST_JSON, "w") as f:
@@ -367,19 +375,7 @@ def auto_tune(years_data: dict[int, tuple],
     """
     years = sorted(years_data.keys())
 
-    # ── Full mode: load training data (cached) ────────────────────────────────
-    if mode == "full":
-        print("\n  [full mode] Loading training data (all coins + years) ...")
-        train_data   = load_training_data(cfg, no_cache=no_cache)
-        X_train_base = train_data["X_train"]
-        y_train_base = train_data["y_train"]
-        X_val_base   = train_data["X_val"]
-        y_val_base   = train_data["y_val"]
-        # feat_cols from training data may differ from backtest (multi-coin intersection)
-        train_feat_cols = train_data["feat_cols"]
-        print(f"  Training set: {len(X_train_base):,} rows  "
-              f"Val: {len(X_val_base):,} rows  "
-              f"Features: {len(train_feat_cols)}")
+    # Full mode loads training data inside each trial (label params vary per trial)
 
     best_score  = -1.0
     best_params: dict = {}
@@ -396,15 +392,17 @@ def auto_tune(years_data: dict[int, tuple],
             rep = run_year_backtest(years_data[yr][0], fast_probs[yr],
                                     cfg, T_up, T_down)
             reports[yr] = rep
-            if rep.get("profit_factor", 0.0) < 0.85 or rep.get("n_trades", 0) < 20:
+            if rep.get("profit_factor", 0.0) < 0.85 or rep.get("n_trades", 0) < 40:
                 try:
                     import optuna
                     raise optuna.exceptions.TrialPruned()
                 except ImportError:
                     break
-        return _score(reports), reports
+        spread = cfg.get("tuning", {}).get("max_pf_spread", 1.0)
+        return _score(reports, max_pf_spread=spread), reports
 
     def objective_full(trial) -> tuple[float, dict, xgb.Booster]:
+        # ── XGBoost params ────────────────────────────────────────────────────
         T_up   = trial.suggest_float("T_up",            0.50, 0.90)
         T_down = trial.suggest_float("T_down",          0.50, 0.90)
         bw     = trial.suggest_float("break_weight",    4.0,  20.0)
@@ -416,8 +414,17 @@ def auto_tune(years_data: dict[int, tuple],
         al     = trial.suggest_float("reg_alpha",       0.0,  10.0)
         la     = trial.suggest_float("reg_lambda",      0.1,  10.0)
         lr     = trial.suggest_float("learning_rate",   0.005,0.05)
+        # ── Label params ──────────────────────────────────────────────────────
+        k_atr     = trial.suggest_int  ("k_atr",      1,    15)
+        H_horizon = trial.suggest_int  ("H_horizon",  10,   40)
+        L_range   = trial.suggest_int  ("L_range",    10,   40)
+        L_atr     = trial.suggest_int  ("L_atr",      3,    14)
+        sl_pct    = trial.suggest_float("sl_pct",     0.001, 0.003)
+        rr_ratio  = trial.suggest_float("rr_ratio",   2.0,   6.0)
+        tp_pct    = sl_pct * rr_ratio
 
         cfg_trial = copy.deepcopy(cfg)
+        # XGBoost
         cfg_trial["training"]["break_weight"]                   = bw
         cfg_trial["training"]["xgb_params"]["max_depth"]        = md
         cfg_trial["training"]["xgb_params"]["min_child_weight"] = mcw
@@ -427,21 +434,42 @@ def auto_tune(years_data: dict[int, tuple],
         cfg_trial["training"]["xgb_params"]["reg_alpha"]        = al
         cfg_trial["training"]["xgb_params"]["reg_lambda"]       = la
         cfg_trial["training"]["xgb_params"]["learning_rate"]    = lr
+        # Label params
+        cfg_trial["labels"]["k_atr"]                = k_atr
+        cfg_trial["labels"]["H_horizon"]            = H_horizon
+        cfg_trial["labels"]["L_range"]              = L_range
+        cfg_trial["labels"]["L_atr"]                = L_atr
+        cfg_trial["labels"]["sl_pct"]               = sl_pct
+        cfg_trial["labels"]["tp_pct"]               = tp_pct
+        cfg_trial["training"]["gap_candles"]        = H_horizon  # must be >= H_horizon
+        # Sync trading sl/tp with labels so backtest uses same barriers
+        cfg_trial["trading"]["sl_pct"] = sl_pct
+        cfg_trial["trading"]["tp_pct"] = tp_pct
 
-        print(f"\n  [full] CV ...")
-        best_n, _ = walk_forward_cv(X_train_base, y_train_base, cfg_trial)
+        # Load training data for this trial's label config (cached by config hash)
+        print(f"\n  [full] Loading data "
+              f"(k_atr={k_atr}, H={H_horizon}, L_range={L_range}, "
+              f"sl={sl_pct:.4f}, rr={rr_ratio:.1f}) ...")
+        train_data      = load_training_data(cfg_trial, no_cache=no_cache)
+        X_train         = train_data["X_train"]
+        y_train         = train_data["y_train"]
+        X_val           = train_data["X_val"]
+        y_val           = train_data["y_val"]
+        trial_feat_cols = train_data["feat_cols"]
+        print(f"  [full] CV ...")
+        best_n, _ = walk_forward_cv(X_train, y_train, cfg_trial)
         print(f"  [full] Training (n={best_n}) ...")
-        m = train_final(X_train_base, y_train_base,
-                        X_val_base,   y_val_base, best_n, cfg_trial)
+        m = train_final(X_train, y_train, X_val, y_val, best_n, cfg_trial)
 
         reports: dict[int, dict] = {}
         for yr in years:
-            probs = _predict(m, years_data[yr][0], train_feat_cols)
-            rep   = run_year_backtest(years_data[yr][0], probs, cfg, T_up, T_down)
+            probs = _predict(m, years_data[yr][0], trial_feat_cols)
+            rep   = run_year_backtest(years_data[yr][0], probs, cfg_trial, T_up, T_down)
             reports[yr] = rep
-            if rep.get("profit_factor", 0.0) < 0.85 or rep.get("n_trades", 0) < 20:
+            if rep.get("profit_factor", 0.0) < 0.85 or rep.get("n_trades", 0) < 40:
                 break
-        return _score(reports), reports, m
+        spread = cfg.get("tuning", {}).get("max_pf_spread", 1.0)
+        return _score(reports, max_pf_spread=spread), reports, m
 
     # ── Wrapped objective (logging + best tracking, thread-safe) ─────────────
     def wrapped_objective(trial) -> float:
@@ -633,12 +661,26 @@ def main() -> None:
     feat_df = analyze_features(model, feat_cols)
 
     # ── Phase 2b: Pre-compute / load cached probabilities ────────────────────
+    # Probs are always cached on the FULL year (cache reuse across runs).
+    # 2025 is then trimmed to the unseen test portion after caching.
     print(f"\n  Pre-computing probabilities ...")
     fast_probs: dict[int, np.ndarray] = {}
     for yr in bt_years:
         fast_probs[yr] = get_probs_cached(
             model, years_data[yr][0], feat_cols,
             coin, yr, mtime, no_cache=args.no_cache)
+
+    # ── Phase 1b: Trim 2025 to unseen test portion only ──────────────────────
+    if 2025 in years_data:
+        print(f"\n  Determining test split cutoff (loading training data) ...")
+        train_data = load_training_data(cfg, no_cache=args.no_cache)
+        test_start = train_data["X_val"].index[0]
+        df_2025, fc_2025 = years_data[2025]
+        mask_2025        = df_2025.index >= test_start
+        years_data[2025] = (df_2025[mask_2025], fc_2025)
+        fast_probs[2025] = fast_probs[2025][mask_2025]
+        print(f"  2025 trimmed to unseen: {mask_2025.sum():,} rows "
+              f"(from {test_start})")
 
     # ── Phase 3: Year-by-year baseline ───────────────────────────────────────
     print(f"\n[Phase 3] Year-by-year baseline (prediction-only) ...")

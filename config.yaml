@@ -11,8 +11,8 @@ data:
   years: [2022, 2023, 2024, 2025]          # years to load; more years = better model but slower training
   coins:                              # coins used for training; more coins = more data diversity
     - BTCUSDT
-    - ETHUSDT
-    - SOLUSDT
+#    - ETHUSDT
+#    - SOLUSDT
 #    - BNBUSDT
 #    - XRPUSDT
 #    - ADAUSDT
@@ -149,7 +149,7 @@ training:
     objective:          "multi:softprob"   # outputs probabilities for all 3 classes; do not change
     num_class:          3                  # must match n_classes; do not change
 
-    n_estimators:       5000               # max number of trees              [range: 500–5000]
+    n_estimators:       10000               # max number of trees              [range: 500–5000]
                                            # increase if any fold hits the cap (early stopping doesn't fire)
                                            # decrease to speed up training
 
@@ -197,11 +197,11 @@ training:
 
 # ── Trading Signal ────────────────────────────────────────────────────────────
 trading:
-  T_up:            0.67   # min model probability for UP_BREAK -> LONG entry  [range: 0.3-0.9]
+  T_up:            0.546   # min model probability for UP_BREAK -> LONG entry  [range: 0.3-0.9]
                            # increase → fewer but higher-confidence entries (better precision)
                            # decrease → more entries but more false signals
 
-  T_down:          0.67   # min model probability for DOWN_BREAK → SHORT entry [range: 0.3–0.9]
+  T_down:          0.587   # min model probability for DOWN_BREAK → SHORT entry [range: 0.3–0.9]
                            # same logic as T_up
 
   d_max_atr:       99     # DISABLED (prediction-only mode) — model decides, no distance gate
@@ -235,6 +235,12 @@ trading:
   initial_capital: 1000.0  # starting capital in USD
   position_size_pct: 10.0    # fraction of capital risked per trade           [range: 0.01–10.0]
                              # 3.0 = 3x leverage; SL=-0.45% capital, TP=+1.35% capital per trade
+
+# ── Tuning (Optuna auto-tuner) ────────────────────────────────────────────────
+tuning:
+  max_pf_spread:  1.0      # reject trial if max(PF) - min(PF) across years > this value
+                           # keeps all 3 years within a similar PF range (consistent model)
+                           # e.g. 1.0 means PF 2023=1.3, 2024=1.4, 2025=2.3 would be rejected
 
 # ── Sweep (grid search over T and leverage) ───────────────────────────────────
 sweep:

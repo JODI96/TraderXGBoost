@@ -1,7 +1,7 @@
 {
   "T_up": 0.67,
   "T_down": 0.67,
-  "d_max_atr": 1.5,
+  "d_max_atr": 99,
   "classes": {
     "0": "DOWN_BREAK_SOON",
     "1": "NO_BREAK",
