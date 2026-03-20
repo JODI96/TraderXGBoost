@@ -43,6 +43,9 @@ models/live_trade_portfolio.json
 # ── Claude local settings ─────────────────────────────────────
 .claude/
 
+# ── Optuna ────────────────────────────────────────────────────
+optuna.db
+
 # ── OS / editor ───────────────────────────────────────────────
 .DS_Store
 Thumbs.db
